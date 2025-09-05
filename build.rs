@@ -1,4 +1,3 @@
-
 const COMMANDS: &[&str] = &[
     "authenticate",
     "status",
