@@ -178,36 +178,45 @@ interface AuthOptions {
 ### Functions
 
 #### `checkStatus(): Promise<Status>`
+
 Checks if biometric authentication is available on the device.
 
 #### `authenticate(reason: string, options?: AuthOptions): Promise<void>`
+
 Prompts the user for biometric authentication.
 
 #### `hasData(options: DataOptions): Promise<boolean>`
+
 Checks if secure data exists for the given domain and name.
 
 #### `getData(options: GetDataOptions): Promise<DataResponse>`
+
 Retrieves secure data after biometric authentication.
 
 #### `setData(options: SetDataOptions): Promise<void>`
+
 Stores data with biometric protection.
 
 #### `removeData(options: RemoveDataOptions): Promise<void>`
+
 Removes secure data.
 
 ## Platform Differences
 
 ### iOS
+
 - Supports Touch ID and Face ID
 - Requires `NSFaceIDUsageDescription` in Info.plist for Face ID
 - Fallback button can be customized with `fallbackTitle`
 
 ### Android
+
 - Supports fingerprint, face, and iris recognition
 - Dialog appearance can be customized with `title` and `subtitle`
 - Supports `confirmationRequired` for additional security
 
 ### Desktop
+
 - Currently returns an error indicating biometry is not supported
 - Desktop support may be added in future versions
 
