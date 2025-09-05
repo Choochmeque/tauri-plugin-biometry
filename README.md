@@ -1,3 +1,7 @@
+[![Crates.io](https://img.shields.io/crates/v/tauri-plugin-biometry)](https://crates.io/crates/tauri-plugin-biometry)
+[![npm](https://img.shields.io/npm/v/@choochmeque/tauri-plugin-biometry-api)](https://www.npmjs.com/package/@choochmeque/tauri-plugin-biometry-api)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 # Tauri Plugin Biometry
 
 A Tauri plugin for biometric authentication (Touch ID, Face ID, fingerprint, etc.) on macOS, iOS, and Android.
