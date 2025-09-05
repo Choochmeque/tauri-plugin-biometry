@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-biometry"
-version = "0.1.0"
+version = "0.1.1"
 authors = [ "You" ]
 description = "A Tauri v2 plugin for biometric authentication (Touch ID, Face ID, fingerprint) on iOS and Android"
 edition = "2021"
