@@ -1,7 +1,7 @@
 [package]
 name = "tauri-plugin-biometry"
 version = "0.1.1"
-authors = [ "You" ]
+authors = ["You"]
 description = "A Tauri v2 plugin for biometric authentication (Touch ID, Face ID, fingerprint) on iOS and Android"
 edition = "2021"
 rust-version = "1.77.2"
@@ -17,6 +17,9 @@ serde_json = "1"
 serde_repr = "0.1"
 thiserror = "2"
 log = "0.4"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Foundation", "Security_Credentials_UI", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 tauri-plugin = { version = "2.4.0", features = ["build"] }
