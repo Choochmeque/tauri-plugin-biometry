@@ -4,7 +4,8 @@
 
 # Tauri Plugin Biometry
 
-A Tauri plugin for biometric authentication (Touch ID, Face ID, fingerprint, etc.) on macOS, iOS, and Android.
+A Tauri plugin for biometric authentication
+(Touch ID, Face ID, fingerprint, etc.) on macOS, iOS, and Android.
 
 ## Features
 
@@ -235,7 +236,8 @@ Common error codes returned by the plugin:
 - All secure data is stored in the system keychain (iOS) or Android Keystore
 - Data is encrypted and can only be accessed after successful biometric authentication
 - The plugin follows platform-specific security best practices
-- Consider implementing additional application-level encryption for highly sensitive data
+- Consider implementing additional application-level encryption
+for highly sensitive data
 
 ## Contributing
 
@@ -247,4 +249,5 @@ This project is licensed under the MIT License.
 
 ## Acknowledgments
 
-Built with [Tauri](https://tauri.app/) - Build smaller, faster, and more secure desktop applications with a web frontend.
+Built with [Tauri](https://tauri.app/) - Build smaller, faster
+and more secure desktop applications with a web frontend.
