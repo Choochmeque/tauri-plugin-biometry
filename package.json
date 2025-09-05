@@ -45,7 +45,7 @@
     "format-check": "prettier --check \"./**/*.{cjs,mjs,js,jsx,mts,ts,tsx,html,css,json}\""
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0"
+    "@tauri-apps/api": "^2.8.0"
   },
   "devDependencies": {
     "@rollup/plugin-typescript": "^12.0.0",
