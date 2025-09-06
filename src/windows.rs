@@ -5,15 +5,10 @@ use crate::models::*;
 
 use windows::{
     core::*,
-    Foundation::IAsyncOperation,
     Security::Credentials::UI::{
         UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
     },
-    Security::Credentials::{
-        KeyCredentialCreationOption, KeyCredentialManager, KeyCredentialRetrievalResult,
-    },
     Win32::{
-        Foundation::HWND,
         UI::WindowsAndMessaging::{
             BringWindowToTop, FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
         },
@@ -48,10 +43,10 @@ fn try_focus_hello_dialog_once() -> bool {
         if hwnd.is_ok() {
             let hwnd = hwnd.unwrap();
             if IsIconic(hwnd).as_bool() {
-                ShowWindow(hwnd, SW_RESTORE);
+                let _ = ShowWindow(hwnd, SW_RESTORE);
             }
-            BringWindowToTop(hwnd);
-            SetForegroundWindow(hwnd);
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
             return true;
         }
     }
