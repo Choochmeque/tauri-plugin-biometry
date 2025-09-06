@@ -72,9 +72,10 @@ impl<R: Runtime> Biometry<R> {
         let availability = UserConsentVerifier::CheckAvailabilityAsync()
             .and_then(|async_op| async_op.get())
             .map_err(|e| {
-                crate::Error::from(std::io::Error::other(
-                    format!("Failed to check biometry availability: {:?}", e),
-                ))
+                crate::Error::from(std::io::Error::other(format!(
+                    "Failed to check biometry availability: {:?}",
+                    e
+                )))
             })?;
 
         let (is_available, biometry_type, error, error_code) = match availability {
@@ -126,9 +127,10 @@ impl<R: Runtime> Biometry<R> {
                 async_op.get()
             })
             .map_err(|e| {
-                crate::Error::from(std::io::Error::other(
-                    format!("Failed to request user verification: {:?}", e),
-                ))
+                crate::Error::from(std::io::Error::other(format!(
+                    "Failed to request user verification: {:?}",
+                    e
+                )))
             })?;
 
         match result {
@@ -145,11 +147,9 @@ impl<R: Runtime> Biometry<R> {
                     "Biometric authentication is disabled by policy",
                 )))
             }
-            UserConsentVerificationResult::NotConfiguredForUser => {
-                Err(crate::Error::from(std::io::Error::other(
-                    "Biometric authentication is not configured for the user",
-                )))
-            }
+            UserConsentVerificationResult::NotConfiguredForUser => Err(crate::Error::from(
+                std::io::Error::other("Biometric authentication is not configured for the user"),
+            )),
             UserConsentVerificationResult::Canceled => {
                 Err(crate::Error::from(std::io::Error::new(
                     std::io::ErrorKind::Interrupted,
@@ -170,25 +170,25 @@ impl<R: Runtime> Biometry<R> {
 
     pub fn has_data(&self, _options: DataOptions) -> crate::Result<bool> {
         Err(crate::Error::from(std::io::Error::other(
-            "Has data is not supported on windows platform",
+            "Biometry has_data is not supported on windows platform",
         )))
     }
 
     pub fn get_data(&self, _options: GetDataOptions) -> crate::Result<DataResponse> {
         Err(crate::Error::from(std::io::Error::other(
-            "Get data is not supported on windows platform",
+            "Biometry get_data is not supported on windows platform",
         )))
     }
 
     pub fn set_data(&self, _options: SetDataOptions) -> crate::Result<()> {
         Err(crate::Error::from(std::io::Error::other(
-            "Set data is not supported on windows platform",
+            "Biometry set_data is not supported on windows platform",
         )))
     }
 
     pub fn remove_data(&self, _options: RemoveDataOptions) -> crate::Result<()> {
         Err(crate::Error::from(std::io::Error::other(
-            "Remove data is not supported on windows platform",
+            "Biometry remove_data is not supported on windows platform",
         )))
     }
 }

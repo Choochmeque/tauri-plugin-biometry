@@ -5,8 +5,10 @@ use tauri::{
 
 pub use models::*;
 
-#[cfg(all(desktop, not(target_os = "windows")))]
+#[cfg(all(desktop, not(target_os = "windows"), not(target_os = "macos")))]
 mod desktop;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(mobile)]
 mod mobile;
 #[cfg(target_os = "windows")]
@@ -18,8 +20,10 @@ mod models;
 
 pub use error::{Error, Result};
 
-#[cfg(all(desktop, not(target_os = "windows")))]
+#[cfg(all(desktop, not(target_os = "windows"), not(target_os = "macos")))]
 use desktop::Biometry;
+#[cfg(target_os = "macos")]
+use macos::Biometry;
 #[cfg(mobile)]
 use mobile::Biometry;
 #[cfg(target_os = "windows")]
@@ -50,10 +54,12 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         .setup(|app, api| {
             #[cfg(mobile)]
             let biometry = mobile::init(app, api)?;
-            #[cfg(all(desktop, not(target_os = "windows")))]
+            #[cfg(all(desktop, not(target_os = "windows"), not(target_os = "macos")))]
             let biometry = desktop::init(app, api)?;
             #[cfg(target_os = "windows")]
             let biometry = windows::init(app, api)?;
+            #[cfg(target_os = "macos")]
+            let biometry = macos::init(app, api)?;
             app.manage(biometry);
             Ok(())
         })
