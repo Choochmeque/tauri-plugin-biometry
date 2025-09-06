@@ -28,8 +28,9 @@ pub struct AuthenticatePayload {
 #[repr(u8)]
 pub enum BiometryType {
     None = 0,
-    TouchID = 1,
-    FaceID = 2,
+    Auto = 1,
+    TouchID = 2,
+    FaceID = 3,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

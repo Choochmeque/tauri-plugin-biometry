@@ -7,12 +7,14 @@ import { invoke } from "@tauri-apps/api/core";
 export enum BiometryType {
   /** No biometry available */
   None = 0,
+  /** Automatic biometry (e.g., Face ID, Touch ID) */
+  Auto = 1,
   /** Apple Touch ID or Android fingerprint authentication */
-  TouchID = 1,
+  TouchID = 2,
   /** Apple Face ID or Android face authentication */
-  FaceID = 2,
+  FaceID = 3,
   /** Android iris authentication (Samsung devices) */
-  Iris = 3,
+  Iris = 4,
 }
 
 /**
