@@ -8,10 +8,8 @@ use windows::{
     Security::Credentials::UI::{
         UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
     },
-    Win32::{
-        UI::WindowsAndMessaging::{
-            BringWindowToTop, FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
-        },
+    Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
     },
 };
 
@@ -40,8 +38,7 @@ fn try_focus_hello_dialog_once() -> bool {
             windows::core::PCWSTR(cls.as_ptr()),
             windows::core::PCWSTR::null(),
         );
-        if hwnd.is_ok() {
-            let hwnd = hwnd.unwrap();
+        if let Ok(hwnd) = hwnd {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
@@ -75,8 +72,7 @@ impl<R: Runtime> Biometry<R> {
         let availability = UserConsentVerifier::CheckAvailabilityAsync()
             .and_then(|async_op| async_op.get())
             .map_err(|e| {
-                crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::from(std::io::Error::other(
                     format!("Failed to check biometry availability: {:?}", e),
                 ))
             })?;
@@ -130,26 +126,19 @@ impl<R: Runtime> Biometry<R> {
                 async_op.get()
             })
             .map_err(|e| {
-                crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::from(std::io::Error::other(
                     format!("Failed to request user verification: {:?}", e),
                 ))
             })?;
 
         match result {
             UserConsentVerificationResult::Verified => Ok(()),
-            UserConsentVerificationResult::DeviceBusy => {
-                Err(crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::ResourceBusy,
-                    "Device is busy",
-                )))
-            }
-            UserConsentVerificationResult::DeviceNotPresent => {
-                Err(crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "No biometric device found",
-                )))
-            }
+            UserConsentVerificationResult::DeviceBusy => Err(crate::Error::from(
+                std::io::Error::new(std::io::ErrorKind::ResourceBusy, "Device is busy"),
+            )),
+            UserConsentVerificationResult::DeviceNotPresent => Err(crate::Error::from(
+                std::io::Error::new(std::io::ErrorKind::NotFound, "No biometric device found"),
+            )),
             UserConsentVerificationResult::DisabledByPolicy => {
                 Err(crate::Error::from(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -157,8 +146,7 @@ impl<R: Runtime> Biometry<R> {
                 )))
             }
             UserConsentVerificationResult::NotConfiguredForUser => {
-                Err(crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Err(crate::Error::from(std::io::Error::other(
                     "Biometric authentication is not configured for the user",
                 )))
             }
@@ -174,8 +162,7 @@ impl<R: Runtime> Biometry<R> {
                     "Too many failed authentication attempts",
                 )))
             }
-            _ => Err(crate::Error::from(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            _ => Err(crate::Error::from(std::io::Error::other(
                 "Authentication failed",
             ))),
         }

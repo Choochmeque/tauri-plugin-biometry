@@ -7,10 +7,10 @@ pub use models::*;
 
 #[cfg(all(desktop, not(target_os = "windows")))]
 mod desktop;
-#[cfg(target_os = "windows")]
-mod windows;
 #[cfg(mobile)]
 mod mobile;
+#[cfg(target_os = "windows")]
+mod windows;
 
 mod commands;
 mod error;
@@ -20,10 +20,10 @@ pub use error::{Error, Result};
 
 #[cfg(all(desktop, not(target_os = "windows")))]
 use desktop::Biometry;
-#[cfg(target_os = "windows")]
-use windows::Biometry;
 #[cfg(mobile)]
 use mobile::Biometry;
+#[cfg(target_os = "windows")]
+use windows::Biometry;
 
 /// Extensions to [`tauri::App`], [`tauri::AppHandle`], [`tauri::WebviewWindow`], [`tauri::Webview`] and [`tauri::Window`] to access the biometry APIs.
 pub trait BiometryExt<R: Runtime> {
