@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: streetsidesoftware/cspell-action@v1.0.1
+      - uses: streetsidesoftware/cspell-action@v7
         with:
           files: "**/*.{rs,md}"
 
