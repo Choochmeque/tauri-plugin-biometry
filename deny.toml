@@ -18,6 +18,7 @@ ignore = [
     "gdk-sys",
     "gdkwayland-sys",
     "gdkx11",
+    "glib",
     "proc-macro-error"
 ]
 
