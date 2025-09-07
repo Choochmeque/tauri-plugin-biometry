@@ -18,8 +18,8 @@ ignore = [
     "gdk-sys",
     "gdkwayland-sys",
     "gdkx11",
-    "glib",
-    "proc-macro-error"
+    "proc-macro-error",
+    "RUSTSEC-2024-0429",
 ]
 
 [sources]
