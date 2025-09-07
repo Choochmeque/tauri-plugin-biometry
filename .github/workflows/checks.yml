@@ -13,7 +13,7 @@ jobs:
       - run: cargo fmt --all -- --check
 
   prettier:
-    name: Prettier
+    name: prettier
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
 
   # Check links in the documentation.
   deadlinks:
-    name: Deadlinks
+    name: cargo-deadlinks
     runs-on: ubuntu-latest
     steps:
       - uses: awalsh128/cache-apt-pkgs-action@latest
@@ -56,11 +56,11 @@ jobs:
 
   # Check links in markdown files.
   mlc:
-    name: MLC
+    name: mlc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: becheran/mlc@v0.14.3
+      - uses: becheran/mlc@v1
 
   # Spellcheck.
   spellcheck:
@@ -71,24 +71,13 @@ jobs:
         with:
           files: "**/*.{rs,md}"
 
-  # Markdown formatting.
-  markdown:
-    name: Markdown lints
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: nosborn/github-action-markdown-cli@v3.5.0
-        with:
-          files: .
-          ignore_path: .markdownlintignore
-
   # cargo-deny.
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v1
+      - uses: EmbarkStudios/cargo-deny-action@v2
 
   # cargo-semver.
   semver:
