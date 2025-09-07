@@ -1,7 +1,23 @@
+use objc2_core_foundation::{
+    kCFBooleanTrue, kCFCopyStringDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFData,
+    CFDictionary, CFDictionaryKeyCallBacks, CFDictionaryValueCallBacks, CFIndex, CFRetained,
+    CFString, CFType,
+};
 use objc2_local_authentication::{LABiometryType, LAContext, LAError, LAPolicy};
+use objc2_security::{
+    errSecDuplicateItem, errSecInteractionNotAllowed, errSecItemNotFound, errSecSuccess,
+    errSecUserCanceled, kSecAttrAccessControl, kSecAttrAccessible,
+    kSecAttrAccessibleWhenUnlockedThisDeviceOnly, kSecAttrAccount, kSecAttrService, kSecClass,
+    kSecClassGenericPassword, kSecMatchLimit, kSecMatchLimitOne, kSecReturnData,
+    kSecUseAuthenticationUI, kSecUseAuthenticationUIFail, kSecUseOperationPrompt, kSecValueData,
+    SecAccessControl, SecAccessControlCreateFlags, SecItemAdd, SecItemCopyMatching, SecItemDelete,
+    SecItemUpdate,
+};
 use serde::de::DeserializeOwned;
+use std::ffi::c_void;
 use tauri::{plugin::PluginApi, AppHandle, Runtime};
 
+use crate::error::{ErrorResponse, PluginInvokeError};
 use crate::models::*;
 
 pub fn init<R: Runtime, C: DeserializeOwned>(
@@ -92,10 +108,13 @@ impl<R: Runtime> Biometry<R> {
                 let code = LAError(ns_error.code());
                 let error_code = la_error_to_string(code);
 
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!("{error_code}: {description}"),
-                )));
+                return Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some(error_code.to_string()),
+                        message: Some(description.to_string()),
+                        data: (),
+                    }),
+                ));
             }
         }
 
@@ -148,15 +167,21 @@ impl<R: Runtime> Biometry<R> {
                             let code = LAError(error.code());
                             let error_code = la_error_to_string(code);
 
-                            let _ = tx_clone.send(Err(crate::Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::PermissionDenied,
-                                format!("{error_code}: {description}"),
-                            ))));
+                            let _ = tx_clone.send(Err(crate::Error::PluginInvoke(
+                                PluginInvokeError::InvokeRejected(ErrorResponse {
+                                    code: Some(error_code.to_string()),
+                                    message: Some(description),
+                                    data: (),
+                                }),
+                            )));
                         } else {
-                            let _ = tx_clone.send(Err(crate::Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::PermissionDenied,
-                                "authenticationFailed: Unknown error".to_string(),
-                            ))));
+                            let _ = tx_clone.send(Err(crate::Error::PluginInvoke(
+                                PluginInvokeError::InvokeRejected(ErrorResponse {
+                                    code: Some("authenticationFailed".to_string()),
+                                    message: Some("Unknown error".to_string()),
+                                    data: (),
+                                }),
+                            )));
                         }
                     },
                 ),
@@ -166,33 +191,351 @@ impl<R: Runtime> Biometry<R> {
         // Wait for authentication result
         match rx.recv() {
             Ok(result) => result,
-            Err(_) => Err(crate::Error::Io(std::io::Error::other(
-                "authenticationFailed: Failed to receive authentication result",
-            ))),
+            Err(_) => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("authenticationFailed".to_string()),
+                    message: Some("Failed to receive authentication result".to_string()),
+                    data: (),
+                }),
+            )),
         }
     }
 
-    pub fn has_data(&self, _options: DataOptions) -> crate::Result<bool> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry has_data is not yet implemented on macOS",
-        )))
+    pub fn has_data(&self, options: DataOptions) -> crate::Result<bool> {
+        unsafe {
+            let account_cf: CFRetained<CFString> = CFString::from_str(&options.name);
+            let service_cf: CFRetained<CFString> = CFString::from_str(&options.domain);
+
+            let keys: [&CFType; 5] = [
+                kSecClass.as_ref(),
+                kSecMatchLimit.as_ref(),
+                kSecUseAuthenticationUI.as_ref(),
+                kSecAttrAccount.as_ref(),
+                kSecAttrService.as_ref(),
+            ];
+            let values: [&CFType; 5] = [
+                kSecClassGenericPassword.as_ref(),
+                kSecMatchLimitOne.as_ref(),
+                kSecUseAuthenticationUIFail.as_ref(),
+                account_cf.as_ref(),
+                service_cf.as_ref(),
+            ];
+
+            let query = CFDictionary::new(
+                None,
+                keys.as_ptr() as *mut *const c_void,
+                values.as_ptr() as *mut *const c_void,
+                keys.len() as CFIndex,
+                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+            )
+            .ok_or_else(|| {
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("internalError".to_string()),
+                    message: Some("Failed to create CFDictionary for query".to_string()),
+                    data: (),
+                }))
+            })?;
+
+            let status = SecItemCopyMatching(&query, std::ptr::null_mut());
+
+            if status == errSecSuccess || status == errSecInteractionNotAllowed {
+                Ok(true)
+            } else if status == errSecItemNotFound {
+                Ok(false)
+            } else {
+                Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("keychainError".to_string()),
+                        message: Some(format!("SecItemCopyMatching failed with status: {status}")),
+                        data: (),
+                    }),
+                ))
+            }
+        }
     }
 
-    pub fn get_data(&self, _options: GetDataOptions) -> crate::Result<DataResponse> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry get_data is not yet implemented on macOS",
-        )))
+    pub fn get_data(&self, options: GetDataOptions) -> crate::Result<DataResponse> {
+        unsafe {
+            let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
+            let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
+            let cf_reason: CFRetained<CFString> = CFString::from_str(&options.reason);
+
+            let keys: [&CFType; 6] = [
+                kSecClass.as_ref(),
+                kSecAttrAccount.as_ref(),
+                kSecAttrService.as_ref(),
+                kSecReturnData.as_ref(),
+                kSecMatchLimit.as_ref(),
+                kSecUseOperationPrompt.as_ref(),
+            ];
+            let values: [&CFType; 6] = [
+                kSecClassGenericPassword.as_ref(),
+                cf_account.as_ref(),
+                cf_service.as_ref(),
+                kCFBooleanTrue.as_ref().ok_or_else(|| {
+                    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("internalError".to_string()),
+                        message: Some("Failed to get kCFBooleanTrue reference".to_string()),
+                        data: (),
+                    }))
+                })?,
+                kSecMatchLimitOne.as_ref(),
+                cf_reason.as_ref(),
+            ];
+
+            let query = CFDictionary::new(
+                None,
+                keys.as_ptr() as *mut *const c_void,
+                values.as_ptr() as *mut *const c_void,
+                keys.len() as CFIndex,
+                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+            )
+            .ok_or_else(|| {
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("internalError".to_string()),
+                    message: Some("Failed to create CFDictionary for query".to_string()),
+                    data: (),
+                }))
+            })?;
+
+            let mut out: *const CFType = std::ptr::null();
+            let status = SecItemCopyMatching(&query, &mut out);
+
+            if status == errSecSuccess {
+                if !out.is_null() {
+                    let cf_data: &CFData = &*(out as *const CFData);
+                    let bytes = cf_data.byte_ptr();
+                    let data = std::slice::from_raw_parts(bytes, cf_data.len() as usize);
+                    Ok(DataResponse {
+                        domain: options.domain,
+                        name: options.name,
+                        data: String::from_utf8_lossy(data).to_string(),
+                    })
+                } else {
+                    Err(crate::Error::PluginInvoke(
+                        PluginInvokeError::InvokeRejected(ErrorResponse {
+                            code: Some("dataError".to_string()),
+                            message: Some("SecItemCopyMatching returned null data".to_string()),
+                            data: (),
+                        }),
+                    ))
+                }
+            } else if status == errSecItemNotFound {
+                return Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("itemNotFound".to_string()),
+                        message: Some(format!("Error retrieving item from keychain: {status}")),
+                        data: (),
+                    }),
+                ));
+            } else if status == errSecUserCanceled {
+                return Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("userCancel".to_string()),
+                        message: Some("User canceled".to_string()),
+                        data: (),
+                    }),
+                ));
+            } else if status == errSecInteractionNotAllowed {
+                return Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("authenticationRequired".to_string()),
+                        message: Some(
+                            "Authentication required but UI interaction is not allowed".to_string(),
+                        ),
+                        data: (),
+                    }),
+                ));
+            } else {
+                return Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("keychainError".to_string()),
+                        message: Some(format!("Error retrieving item from keychain: {status}")),
+                        data: (),
+                    }),
+                ));
+            }
+        }
     }
 
-    pub fn set_data(&self, _options: SetDataOptions) -> crate::Result<()> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry set_data is not yet implemented on macOS",
-        )))
+    pub fn set_data(&self, options: SetDataOptions) -> crate::Result<()> {
+        unsafe {
+            let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
+            let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
+            let cf_value: CFRetained<CFData> = CFData::from_bytes(options.data.as_bytes());
+
+            // Create SecAccessControl(userPresence)
+            let ac_ref = SecAccessControl::with_flags(
+                None,
+                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                SecAccessControlCreateFlags::UserPresence,
+                std::ptr::null_mut(),
+            )
+            .ok_or_else(|| {
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("internalError".to_string()),
+                    message: Some("Failed to create SecAccessControl".to_string()),
+                    data: (),
+                }))
+            })?;
+
+            // Attributes for SecItemAdd
+            let keys: [&CFType; 6] = [
+                kSecClass.as_ref(),
+                kSecAttrAccount.as_ref(),
+                kSecAttrService.as_ref(),
+                kSecValueData.as_ref(),
+                kSecAttrAccessControl.as_ref(),
+                kSecAttrAccessible.as_ref(),
+            ];
+            let values: [&CFType; 6] = [
+                kSecClassGenericPassword.as_ref(),
+                cf_account.as_ref(),
+                cf_service.as_ref(),
+                cf_value.as_ref(),
+                ac_ref.as_ref(),
+                kSecAttrAccessibleWhenUnlockedThisDeviceOnly.as_ref(),
+            ];
+
+            let add_dict = CFDictionary::new(
+                None,
+                keys.as_ptr() as *mut *const c_void,
+                values.as_ptr() as *mut *const c_void,
+                keys.len() as CFIndex,
+                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+            )
+            .ok_or_else(|| {
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("internalError".to_string()),
+                    message: Some("Failed to create CFDictionary for add_dict".to_string()),
+                    data: (),
+                }))
+            })?;
+
+            let mut status = SecItemAdd(&add_dict, std::ptr::null_mut());
+            if status == errSecDuplicateItem {
+                // Query dict (class + account + service)
+                let q_keys: [&CFType; 3] = [
+                    kSecClass.as_ref(),
+                    kSecAttrAccount.as_ref(),
+                    kSecAttrService.as_ref(),
+                ];
+                let q_vals: [&CFType; 3] = [
+                    kSecClassGenericPassword.as_ref(),
+                    cf_account.as_ref(),
+                    cf_service.as_ref(),
+                ];
+
+                let query = CFDictionary::new(
+                    None,
+                    q_keys.as_ptr() as *mut *const c_void,
+                    q_vals.as_ptr() as *mut *const c_void,
+                    q_keys.len() as CFIndex,
+                    &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
+                    &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                )
+                .ok_or_else(|| {
+                    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("internalError".to_string()),
+                        message: Some("Failed to create CFDictionary for update query".to_string()),
+                        data: (),
+                    }))
+                })?;
+
+                // Update dict (value data + access control + accessibility)
+                let u_keys: [&CFType; 3] = [
+                    kSecValueData.as_ref(),
+                    kSecAttrAccessControl.as_ref(),
+                    kSecAttrAccessible.as_ref(),
+                ];
+                let u_vals: [&CFType; 3] = [
+                    cf_value.as_ref(),
+                    ac_ref.as_ref(),
+                    kSecAttrAccessibleWhenUnlockedThisDeviceOnly.as_ref(),
+                ];
+
+                let update_dict = CFDictionary::new(
+                    None,
+                    u_keys.as_ptr() as *mut *const c_void,
+                    u_vals.as_ptr() as *mut *const c_void,
+                    u_keys.len() as CFIndex,
+                    &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
+                    &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                )
+                .ok_or_else(|| {
+                    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("internalError".to_string()),
+                        message: Some("Failed to create CFDictionary for update_dict".to_string()),
+                        data: (),
+                    }))
+                })?;
+
+                status = SecItemUpdate(&query, &update_dict);
+            }
+
+            if status == errSecSuccess {
+                Ok(())
+            } else {
+                Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("keychainError".to_string()),
+                        message: Some(format!("Error adding item to keychain: {status}")),
+                        data: (),
+                    }),
+                ))
+            }
+        }
     }
 
-    pub fn remove_data(&self, _options: RemoveDataOptions) -> crate::Result<()> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry remove_data is not yet implemented on macOS",
-        )))
+    pub fn remove_data(&self, options: RemoveDataOptions) -> crate::Result<()> {
+        unsafe {
+            let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
+            let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
+
+            // Build immutable CFDictionary with 3 key-value pairs
+            let keys: [&CFType; 3] = [
+                kSecClass.as_ref(),
+                kSecAttrAccount.as_ref(),
+                kSecAttrService.as_ref(),
+            ];
+            let values: [&CFType; 3] = [
+                kSecClassGenericPassword.as_ref(),
+                cf_account.as_ref(),
+                cf_service.as_ref(),
+            ];
+
+            let query = CFDictionary::new(
+                None,
+                keys.as_ptr() as *mut *const c_void,
+                values.as_ptr() as *mut *const c_void,
+                keys.len() as CFIndex,
+                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+            )
+            .ok_or_else(|| {
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("internalError".to_string()),
+                    message: Some("Failed to create CFDictionary for delete query".to_string()),
+                    data: (),
+                }))
+            })?;
+
+            let status = SecItemDelete(&query);
+
+            if status == errSecSuccess || status == errSecItemNotFound {
+                Ok(())
+            } else {
+                Err(crate::Error::PluginInvoke(
+                    PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("keychainError".to_string()),
+                        message: Some(format!("Error deleting item from keychain: {status}")),
+                        data: (),
+                    }),
+                ))
+            }
+        }
     }
 }
