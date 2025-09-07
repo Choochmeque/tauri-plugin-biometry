@@ -1,6 +1,7 @@
 use serde::de::DeserializeOwned;
 use tauri::{plugin::PluginApi, AppHandle, Runtime};
 
+use crate::error::{ErrorResponse, PluginInvokeError};
 use crate::models::*;
 
 use windows::{
@@ -72,10 +73,11 @@ impl<R: Runtime> Biometry<R> {
         let availability = UserConsentVerifier::CheckAvailabilityAsync()
             .and_then(|async_op| async_op.get())
             .map_err(|e| {
-                crate::Error::from(std::io::Error::other(format!(
-                    "Failed to check biometry availability: {:?}",
-                    e
-                )))
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("internalError".to_string()),
+                    message: Some(format!("Failed to check biometry availability: {:?}", e)),
+                    data: (),
+                }))
             })?;
 
         let (is_available, biometry_type, error, error_code) = match availability {
@@ -127,68 +129,108 @@ impl<R: Runtime> Biometry<R> {
                 async_op.get()
             })
             .map_err(|e| {
-                crate::Error::from(std::io::Error::other(format!(
-                    "Failed to request user verification: {:?}",
-                    e
-                )))
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("internalError".to_string()),
+                    message: Some(format!("Failed to request user verification: {:?}", e)),
+                    data: (),
+                }))
             })?;
 
         match result {
             UserConsentVerificationResult::Verified => Ok(()),
-            UserConsentVerificationResult::DeviceBusy => Err(crate::Error::from(
-                std::io::Error::new(std::io::ErrorKind::ResourceBusy, "Device is busy"),
+            UserConsentVerificationResult::DeviceBusy => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("systemCancel".to_string()),
+                    message: Some("Device is busy".to_string()),
+                    data: (),
+                }),
             )),
-            UserConsentVerificationResult::DeviceNotPresent => Err(crate::Error::from(
-                std::io::Error::new(std::io::ErrorKind::NotFound, "No biometric device found"),
+            UserConsentVerificationResult::DeviceNotPresent => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("biometryNotAvailable".to_string()),
+                    message: Some("No biometric device found".to_string()),
+                    data: (),
+                }),
             )),
-            UserConsentVerificationResult::DisabledByPolicy => {
-                Err(crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "Biometric authentication is disabled by policy",
-                )))
-            }
-            UserConsentVerificationResult::NotConfiguredForUser => Err(crate::Error::from(
-                std::io::Error::other("Biometric authentication is not configured for the user"),
+            UserConsentVerificationResult::DisabledByPolicy => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("biometryNotAvailable".to_string()),
+                    message: Some("Biometric authentication is disabled by policy".to_string()),
+                    data: (),
+                }),
             )),
-            UserConsentVerificationResult::Canceled => {
-                Err(crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    "Authentication was canceled by the user",
-                )))
-            }
-            UserConsentVerificationResult::RetriesExhausted => {
-                Err(crate::Error::from(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "Too many failed authentication attempts",
-                )))
-            }
-            _ => Err(crate::Error::from(std::io::Error::other(
-                "Authentication failed",
-            ))),
+            UserConsentVerificationResult::NotConfiguredForUser => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("biometryNotEnrolled".to_string()),
+                    message: Some(
+                        "Biometric authentication is not configured for the user".to_string(),
+                    ),
+                    data: (),
+                }),
+            )),
+            UserConsentVerificationResult::Canceled => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("userCancel".to_string()),
+                    message: Some("Authentication was canceled by the user".to_string()),
+                    data: (),
+                }),
+            )),
+            UserConsentVerificationResult::RetriesExhausted => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("biometryLockout".to_string()),
+                    message: Some("Too many failed authentication attempts".to_string()),
+                    data: (),
+                }),
+            )),
+            _ => Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("authenticationFailed".to_string()),
+                    message: Some("Authentication failed".to_string()),
+                    data: (),
+                }),
+            )),
         }
     }
 
     pub fn has_data(&self, _options: DataOptions) -> crate::Result<bool> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry has_data is not supported on windows platform",
-        )))
+        Err(crate::Error::PluginInvoke(
+            PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("notSupported".to_string()),
+                message: Some("Biometry has_data is not supported on Windows platform".to_string()),
+                data: (),
+            }),
+        ))
     }
 
     pub fn get_data(&self, _options: GetDataOptions) -> crate::Result<DataResponse> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry get_data is not supported on windows platform",
-        )))
+        Err(crate::Error::PluginInvoke(
+            PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("notSupported".to_string()),
+                message: Some("Biometry get_data is not supported on Windows platform".to_string()),
+                data: (),
+            }),
+        ))
     }
 
     pub fn set_data(&self, _options: SetDataOptions) -> crate::Result<()> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry set_data is not supported on windows platform",
-        )))
+        Err(crate::Error::PluginInvoke(
+            PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("notSupported".to_string()),
+                message: Some("Biometry set_data is not supported on Windows platform".to_string()),
+                data: (),
+            }),
+        ))
     }
 
     pub fn remove_data(&self, _options: RemoveDataOptions) -> crate::Result<()> {
-        Err(crate::Error::from(std::io::Error::other(
-            "Biometry remove_data is not supported on windows platform",
-        )))
+        Err(crate::Error::PluginInvoke(
+            PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("notSupported".to_string()),
+                message: Some(
+                    "Biometry remove_data is not supported on Windows platform".to_string(),
+                ),
+                data: (),
+            }),
+        ))
     }
 }

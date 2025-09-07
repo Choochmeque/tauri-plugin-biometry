@@ -4,17 +4,17 @@
 
 # Tauri Plugin Biometry
 
-A Tauri plugin for biometric authentication
-(Touch ID, Face ID, fingerprint, etc.) on macOS, iOS, and Android.
+A Tauri plugin for biometric authentication (Touch ID, Face ID, Windows Hello, fingerprint, etc.) with support for macOS, Windows, iOS, and Android.
 
 ## Features
 
-- 🔐 Biometric authentication (Touch ID, Face ID, fingerprint)
-- 📱 Support for iOS and Android
-- 🖥️ Desktop support planned
-- 🔑 Secure data storage with biometric protection
+- 🔐 Biometric authentication (Touch ID, Face ID, Windows Hello, fingerprint)
+- 📱 Full support for iOS and Android
+- 🖥️ Desktop support for macOS (Touch ID) and Windows (Windows Hello)
+- 🔑 Secure data storage with biometric protection (Android/iOS/macOS only)
 - 🎛️ Fallback to device passcode/password
 - 🛡️ Native security best practices
+- ⚡ Proper error handling with detailed error codes
 
 ## Installation
 
@@ -24,7 +24,7 @@ Add the plugin to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tauri-plugin-biometry = "0.1"
+tauri-plugin-biometry = "0.2"
 ```
 
 ### JavaScript/TypeScript
@@ -69,7 +69,7 @@ The plugin automatically handles the necessary permissions for Android.
 
 ### Permissions
 
-Add the biometry permission to your `capabilities` in `default.json`:
+Configure the plugin permissions in your `capabilities/default.json`:
 
 ```json
 {
@@ -88,7 +88,12 @@ import { checkStatus } from '@choochmeque/tauri-plugin-biometry-api';
 
 const status = await checkStatus();
 console.log('Biometry available:', status.isAvailable);
-console.log('Biometry type:', status.biometryType); // 0: None, 1: TouchID, 2: FaceID
+console.log('Biometry type:', status.biometryType); // 0: None, 1: TouchID, 2: FaceID, 3: Iris, 4: Auto (Windows Hello)
+
+if (status.error) {
+  console.error('Error:', status.error);
+  console.error('Error code:', status.errorCode);
+}
 ```
 
 ### Authenticate
@@ -111,7 +116,7 @@ try {
 }
 ```
 
-### Store Secure Data
+### Store Secure Data (macOS/iOS only)
 
 ```typescript
 import { setData, getData, hasData, removeData } from '@choochmeque/tauri-plugin-biometry-api';
@@ -134,8 +139,7 @@ if (exists) {
   const response = await getData({
     domain: 'com.myapp',
     name: 'api_key',
-    reason: 'Access your API key',
-    cancelTitle: 'Cancel'
+    reason: 'Access your API key'
   });
   console.log('Retrieved data:', response.data);
 }
@@ -147,6 +151,8 @@ await removeData({
 });
 ```
 
+**Note:** Data storage methods are not supported on Windows and will return a `notSupported` error.
+
 ## API Reference
 
 ### Types
@@ -156,7 +162,8 @@ enum BiometryType {
   None = 0,
   TouchID = 1,
   FaceID = 2,
-  Iris = 3
+  Iris = 3,
+  Auto = 4  // Windows Hello (auto-detects available biometry)
 }
 
 interface Status {
@@ -216,10 +223,20 @@ Removes secure data.
 - Dialog appearance can be customized with `title` and `subtitle`
 - Supports `confirmationRequired` for additional security
 
-### Desktop
+### macOS
 
-- Currently returns an error indicating biometry is not supported
-- Desktop support may be added in future versions
+- Supports Touch ID
+- Full keychain integration for secure data storage
+- Same API as iOS for consistency
+- Requires user authentication for data access
+- **Important:** The app must be properly code-signed to use keychain data storage. Without proper signing, data storage operations may fail with errors
+
+### Windows
+
+- Supports Windows Hello (fingerprint, face, PIN)
+- Authentication only (data storage methods return "not supported" error)
+- Automatically focuses Windows Hello dialog
+- Returns `BiometryType.Auto` as it uses Windows Hello's automatic selection
 
 ## Error Codes
 
@@ -230,14 +247,26 @@ Common error codes returned by the plugin:
 - `biometryNotAvailable` - Biometry is not available on device
 - `biometryNotEnrolled` - No biometric data is enrolled
 - `biometryLockout` - Too many failed attempts, biometry is locked
+- `systemCancel` - System cancelled the operation (device busy)
+- `appCancel` - Application cancelled the operation
+- `invalidContext` - Invalid authentication context
+- `notInteractive` - Non-interactive authentication not allowed
+- `passcodeNotSet` - Device passcode not set
+- `userFallback` - User chose to use fallback authentication
+- `itemNotFound` - Keychain item not found (macOS/iOS)
+- `authenticationRequired` - Authentication required but UI interaction not allowed
+- `keychainError` - Generic keychain operation error
+- `internalError` - Internal plugin error
+- `notSupported` - Operation not supported on this platform
 
 ## Security Considerations
 
-- All secure data is stored in the system keychain (iOS) or Android Keystore
+- All secure data is stored in the system keychain (macOS/iOS) or Android Keystore
 - Data is encrypted and can only be accessed after successful biometric authentication
 - The plugin follows platform-specific security best practices
-- Consider implementing additional application-level encryption
-for highly sensitive data
+- Windows currently supports authentication only, not secure data storage
+- **macOS Code Signing:** Your app must be properly code-signed to use keychain storage on macOS. Development builds may work with ad-hoc signing, but production apps require valid Developer ID or App Store signing
+- Consider implementing additional application-level encryption for highly sensitive data
 
 ## Contributing
 
