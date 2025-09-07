@@ -9,6 +9,15 @@ use windows::{
     Security::Credentials::UI::{
         UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
     },
+    Security::Credentials::{
+        KeyCredentialCreationOption, KeyCredentialManager, KeyCredentialRetrievalResult,
+        KeyCredentialStatus, PasswordCredential, PasswordVault,
+    },
+    Security::Cryptography::Core::{
+        CryptographicEngine, HashAlgorithmNames, HashAlgorithmProvider, SymmetricAlgorithmNames,
+        SymmetricKeyAlgorithmProvider,
+    },
+    Security::Cryptography::{BinaryStringEncoding, CryptographicBuffer},
     Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
     },
@@ -63,6 +72,140 @@ fn nudge_hello_dialog_focus_async(retries: u32, delay_ms: u64) {
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
     });
+}
+
+/// Create or open a Windows Hello credential
+fn get_credential(name: &str, create_if_missing: bool) -> Result<KeyCredentialRetrievalResult> {
+    let credential_name = HSTRING::from(name);
+
+    // Focus the Hello dialog
+    nudge_hello_dialog_focus_async(5, 250);
+
+    if create_if_missing {
+        KeyCredentialManager::RequestCreateAsync(
+            &credential_name,
+            KeyCredentialCreationOption::ReplaceExisting,
+        )?
+        .get()
+    } else {
+        KeyCredentialManager::OpenAsync(&credential_name)?.get()
+    }
+}
+
+/// Encrypt data using Windows Hello credential
+fn encrypt_data(
+    domain: &str,
+    data: &[u8],
+    credential_result: &KeyCredentialRetrievalResult,
+) -> Result<String> {
+    let status = credential_result.Status()?;
+    if status != KeyCredentialStatus::Success {
+        return Err(Error::from(HRESULT(-1)));
+    }
+
+    let credential = credential_result.Credential()?;
+    let challenge_buffer = CryptographicBuffer::ConvertStringToBinary(
+        &HSTRING::from(domain),
+        BinaryStringEncoding::Utf8,
+    )?;
+
+    // Sign the challenge to get a unique key
+    let signature = credential.RequestSignAsync(&challenge_buffer)?.get()?;
+    let signature_result = signature.Result()?;
+
+    // Use the signature to derive an encryption key
+    let hash_provider = HashAlgorithmProvider::OpenAlgorithm(&HashAlgorithmNames::Sha256()?)?;
+    let key_hash = hash_provider.HashData(&signature_result)?;
+
+    // Create AES encryption provider
+    let aes_provider =
+        SymmetricKeyAlgorithmProvider::OpenAlgorithm(&SymmetricAlgorithmNames::AesCbcPkcs7()?)?;
+
+    // Generate IV from domain hash
+    let iv_data = CryptographicBuffer::ConvertStringToBinary(
+        &HSTRING::from(format!("IV_{}", domain)),
+        BinaryStringEncoding::Utf8,
+    )?;
+    let iv_hash = hash_provider.HashData(&iv_data)?;
+
+    // Take first 16 bytes of IV hash for AES-128
+    let mut iv_bytes: windows::core::Array<u8> = windows::core::Array::new();
+    CryptographicBuffer::CopyToByteArray(&iv_hash, &mut iv_bytes)?;
+    let iv_slice: Vec<u8> = iv_bytes.as_slice()[..16].to_vec();
+    let iv = CryptographicBuffer::CreateFromByteArray(&iv_slice)?;
+
+    // Create symmetric key
+    let key = aes_provider.CreateSymmetricKey(&key_hash)?;
+
+    // Encrypt the data
+    let data_buffer = CryptographicBuffer::CreateFromByteArray(data)?;
+    let encrypted_buffer = CryptographicEngine::Encrypt(&key, &data_buffer, Some(&iv))?;
+
+    // Convert to base64 string
+    Ok(CryptographicBuffer::EncodeToBase64String(&encrypted_buffer)?.to_string())
+}
+
+/// Decrypt data using Windows Hello credential
+fn decrypt_data(
+    domain: &str,
+    encrypted_data: &str,
+    credential_result: &KeyCredentialRetrievalResult,
+) -> Result<Vec<u8>> {
+    let status = credential_result.Status()?;
+    if status != KeyCredentialStatus::Success {
+        return Err(Error::from(HRESULT(-1)));
+    }
+
+    let credential = credential_result.Credential()?;
+    let challenge_buffer = CryptographicBuffer::ConvertStringToBinary(
+        &HSTRING::from(domain),
+        BinaryStringEncoding::Utf8,
+    )?;
+
+    // Sign the challenge to get the same key
+    let signature = credential.RequestSignAsync(&challenge_buffer)?.get()?;
+    let signature_status = signature.Status()?;
+
+    if signature_status != KeyCredentialStatus::Success {
+        return Err(Error::from(HRESULT(-1)));
+    }
+
+    let signature_result = signature.Result()?;
+
+    // Use the signature to derive the decryption key
+    let hash_provider = HashAlgorithmProvider::OpenAlgorithm(&HashAlgorithmNames::Sha256()?)?;
+    let key_hash = hash_provider.HashData(&signature_result)?;
+
+    // Create AES decryption provider
+    let aes_provider =
+        SymmetricKeyAlgorithmProvider::OpenAlgorithm(&SymmetricAlgorithmNames::AesCbcPkcs7()?)?;
+
+    // Generate IV from domain hash (same as encryption)
+    let iv_data = CryptographicBuffer::ConvertStringToBinary(
+        &HSTRING::from(format!("IV_{}", domain)),
+        BinaryStringEncoding::Utf8,
+    )?;
+    let iv_hash = hash_provider.HashData(&iv_data)?;
+
+    // Take first 16 bytes of IV hash for AES-128
+    let mut iv_bytes: windows::core::Array<u8> = windows::core::Array::new();
+    CryptographicBuffer::CopyToByteArray(&iv_hash, &mut iv_bytes)?;
+    let iv_slice: Vec<u8> = iv_bytes.as_slice()[..16].to_vec();
+    let iv = CryptographicBuffer::CreateFromByteArray(&iv_slice)?;
+
+    // Create symmetric key
+    let key = aes_provider.CreateSymmetricKey(&key_hash)?;
+
+    // Decode from base64 and decrypt
+    let encrypted_buffer =
+        CryptographicBuffer::DecodeFromBase64String(&HSTRING::from(encrypted_data))?;
+    let decrypted_buffer = CryptographicEngine::Decrypt(&key, &encrypted_buffer, Some(&iv))?;
+
+    // Convert to bytes
+    let mut decrypted_bytes: windows::core::Array<u8> = windows::core::Array::new();
+    CryptographicBuffer::CopyToByteArray(&decrypted_buffer, &mut decrypted_bytes)?;
+
+    Ok(decrypted_bytes.to_vec())
 }
 
 /// Access to the biometry APIs.
@@ -192,45 +335,292 @@ impl<R: Runtime> Biometry<R> {
         }
     }
 
-    pub fn has_data(&self, _options: DataOptions) -> crate::Result<bool> {
-        Err(crate::Error::PluginInvoke(
-            PluginInvokeError::InvokeRejected(ErrorResponse {
-                code: Some("notSupported".to_string()),
-                message: Some("Biometry has_data is not supported on Windows platform".to_string()),
+    pub fn has_data(&self, options: DataOptions) -> crate::Result<bool> {
+        let domain = options.domain;
+        let name = options.name;
+
+        if domain.is_empty() || name.is_empty() {
+            return Ok(false);
+        }
+
+        // Try to open the credential (without creating)
+        let credential_result = match get_credential(&name, false) {
+            Ok(result) => result,
+            Err(_) => return Ok(false),
+        };
+
+        let status = credential_result.Status().map_err(|_| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some("Failed to check credential status".to_string()),
                 data: (),
-            }),
-        ))
+            }))
+        })?;
+
+        if status != KeyCredentialStatus::Success {
+            return Ok(false);
+        }
+
+        // Check if there's data in the PasswordVault
+        let vault = PasswordVault::new().map_err(|_| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some("Failed to access password vault".to_string()),
+                data: (),
+            }))
+        })?;
+
+        let resource = HSTRING::from(&name);
+        let username = HSTRING::from(&domain);
+
+        // Try to retrieve the credential without the password
+        match vault.Retrieve(&resource, &username) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
+        }
     }
 
-    pub fn get_data(&self, _options: GetDataOptions) -> crate::Result<DataResponse> {
-        Err(crate::Error::PluginInvoke(
-            PluginInvokeError::InvokeRejected(ErrorResponse {
-                code: Some("notSupported".to_string()),
-                message: Some("Biometry get_data is not supported on Windows platform".to_string()),
+    pub fn get_data(&self, options: GetDataOptions) -> crate::Result<DataResponse> {
+        let domain = options.domain.clone();
+        let name = options.name.clone();
+
+        if domain.is_empty() || name.is_empty() {
+            return Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("invalidInput".to_string()),
+                    message: Some("Domain and name must not be empty".to_string()),
+                    data: (),
+                }),
+            ));
+        }
+
+        // Try to open the credential (without creating)
+        let credential_result = get_credential(&name, false).map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("credentialNotFound".to_string()),
+                message: Some(format!("Failed to open credential: {:?}", e)),
                 data: (),
-            }),
-        ))
+            }))
+        })?;
+
+        let status = credential_result.Status().map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to check credential status: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        if status != KeyCredentialStatus::Success {
+            return Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("credentialNotFound".to_string()),
+                    message: Some("Credential not available".to_string()),
+                    data: (),
+                }),
+            ));
+        }
+
+        // Access the PasswordVault
+        let vault = PasswordVault::new().map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to access password vault: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        let resource = HSTRING::from(&name);
+        let username = HSTRING::from(&domain);
+
+        // Retrieve the credential with password
+        let credential = vault.Retrieve(&resource, &username).map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("dataNotFound".to_string()),
+                message: Some(format!("Failed to retrieve data: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        // Get the password (encrypted data)
+        credential.RetrievePassword().map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to retrieve password: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        let encrypted_data = credential.Password().map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to get password: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        // Decrypt the data
+        let decrypted_data = decrypt_data(&domain, &encrypted_data.to_string(), &credential_result)
+            .map_err(|e| {
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("decryptionFailed".to_string()),
+                    message: Some(format!("Failed to decrypt data: {:?}", e)),
+                    data: (),
+                }))
+            })?;
+
+        // Convert decrypted bytes to string
+        let data_string = String::from_utf8(decrypted_data).map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to convert data to string: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        Ok(DataResponse {
+            domain,
+            name,
+            data: data_string,
+        })
     }
 
-    pub fn set_data(&self, _options: SetDataOptions) -> crate::Result<()> {
-        Err(crate::Error::PluginInvoke(
-            PluginInvokeError::InvokeRejected(ErrorResponse {
-                code: Some("notSupported".to_string()),
-                message: Some("Biometry set_data is not supported on Windows platform".to_string()),
+    pub fn set_data(&self, options: SetDataOptions) -> crate::Result<()> {
+        let domain = options.domain;
+        let name = options.name;
+        let data = options.data;
+
+        if domain.is_empty() || name.is_empty() {
+            return Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("invalidInput".to_string()),
+                    message: Some("Domain and name must not be empty".to_string()),
+                    data: (),
+                }),
+            ));
+        }
+
+        // Create or replace the credential
+        let credential_result = get_credential(&name, true).map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("credentialCreationFailed".to_string()),
+                message: Some(format!("Failed to create credential: {:?}", e)),
                 data: (),
-            }),
-        ))
+            }))
+        })?;
+
+        let status = credential_result.Status().map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to check credential status: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        if status != KeyCredentialStatus::Success {
+            return Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("credentialCreationFailed".to_string()),
+                    message: Some("Failed to create credential".to_string()),
+                    data: (),
+                }),
+            ));
+        }
+
+        // Encrypt the data
+        let encrypted_data =
+            encrypt_data(&domain, data.as_bytes(), &credential_result).map_err(|e| {
+                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("encryptionFailed".to_string()),
+                    message: Some(format!("Failed to encrypt data: {:?}", e)),
+                    data: (),
+                }))
+            })?;
+
+        // Access the PasswordVault
+        let vault = PasswordVault::new().map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to access password vault: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        let resource = HSTRING::from(&name);
+        let username = HSTRING::from(&domain);
+        let password = HSTRING::from(&encrypted_data);
+
+        // Try to remove existing credential if it exists
+        if let Ok(existing) = vault.Retrieve(&resource, &username) {
+            let _ = vault.Remove(&existing);
+        }
+
+        // Create new credential
+        let credential = PasswordCredential::CreatePasswordCredential(
+            &resource, &username, &password,
+        )
+        .map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to create password credential: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        // Add to vault
+        vault.Add(&credential).map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to store credential: {:?}", e)),
+                data: (),
+            }))
+        })?;
+
+        Ok(())
     }
 
-    pub fn remove_data(&self, _options: RemoveDataOptions) -> crate::Result<()> {
-        Err(crate::Error::PluginInvoke(
-            PluginInvokeError::InvokeRejected(ErrorResponse {
-                code: Some("notSupported".to_string()),
-                message: Some(
-                    "Biometry remove_data is not supported on Windows platform".to_string(),
-                ),
+    pub fn remove_data(&self, options: RemoveDataOptions) -> crate::Result<()> {
+        let domain = options.domain;
+        let name = options.name;
+
+        if domain.is_empty() || name.is_empty() {
+            return Err(crate::Error::PluginInvoke(
+                PluginInvokeError::InvokeRejected(ErrorResponse {
+                    code: Some("invalidInput".to_string()),
+                    message: Some("Domain and name must not be empty".to_string()),
+                    data: (),
+                }),
+            ));
+        }
+
+        // Access the PasswordVault
+        let vault = PasswordVault::new().map_err(|e| {
+            crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                code: Some("internalError".to_string()),
+                message: Some(format!("Failed to access password vault: {:?}", e)),
                 data: (),
-            }),
-        ))
+            }))
+        })?;
+
+        let resource = HSTRING::from(&name);
+        let username = HSTRING::from(&domain);
+
+        // Try to retrieve and remove the credential
+        match vault.Retrieve(&resource, &username) {
+            Ok(credential) => {
+                vault.Remove(&credential).map_err(|e| {
+                    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+                        code: Some("internalError".to_string()),
+                        message: Some(format!("Failed to remove credential: {:?}", e)),
+                        data: (),
+                    }))
+                })?;
+                Ok(())
+            }
+            Err(_) => {
+                // Credential doesn't exist, which is fine for remove
+                Ok(())
+            }
+        }
     }
 }
