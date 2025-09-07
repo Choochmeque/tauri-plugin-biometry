@@ -9,6 +9,18 @@ targets = [
 ]
 all-features = true
 
+[advisories]
+unmaintained = "workspace"
+ignore = [
+    "atk-sys",
+    "fxhash",
+    "gdk",
+    "gdk-sys",
+    "gdkwayland-sys",
+    "gdkx11",
+    "proc-macro-error"
+]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
