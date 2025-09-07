@@ -1,8 +1,8 @@
 {
   "name": "@choochmeque/tauri-plugin-biometry-api",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": "You",
-  "description": "A Tauri v2 plugin for biometric authentication (Touch ID, Face ID, fingerprint) on iOS and Android",
+  "description": "A Tauri v2 plugin for biometric authentication (Touch ID, Face ID, fingerprint) on Android, macOS, iOS and Windows.",
   "type": "module",
   "types": "./dist-js/index.d.ts",
   "main": "./dist-js/index.cjs",
