@@ -24,7 +24,9 @@
     "PCWSTR",
     "HSTRING",
     "HRESULT",
-    "Pkcs"
+    "Pkcs",
+    "choochmeque",
+    "myapp"
   ],
   "useGitignore": true,
   "ignorePaths": [
