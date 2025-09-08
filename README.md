@@ -11,7 +11,7 @@ A Tauri plugin for biometric authentication (Touch ID, Face ID, Windows Hello, f
 - 🔐 Biometric authentication (Touch ID, Face ID, Windows Hello, fingerprint)
 - 📱 Full support for iOS and Android
 - 🖥️ Desktop support for macOS (Touch ID) and Windows (Windows Hello)
-- 🔑 Secure data storage with biometric protection (Android/iOS/macOS only)
+- 🔑 Secure data storage with biometric protection (Android/iOS/macOS/Windows)
 - 🎛️ Fallback to device passcode/password
 - 🛡️ Native security best practices
 - ⚡ Proper error handling with detailed error codes
@@ -116,7 +116,7 @@ try {
 }
 ```
 
-### Store Secure Data (macOS/iOS only)
+### Store Secure Data
 
 ```typescript
 import { setData, getData, hasData, removeData } from '@choochmeque/tauri-plugin-biometry-api';
@@ -150,8 +150,6 @@ await removeData({
   name: 'api_key'
 });
 ```
-
-**Note:** Data storage methods are not supported on Windows and will return a `notSupported` error.
 
 ## API Reference
 
@@ -234,7 +232,9 @@ Removes secure data.
 ### Windows
 
 - Supports Windows Hello (fingerprint, face, PIN)
-- Authentication only (data storage methods return "not supported" error)
+- Full secure data storage using Windows Hello credentials
+- Data is encrypted using AES-256 with Windows Hello protected keys
+- **Note:** `setData` will prompt for Windows Hello authentication when storing data
 - Automatically focuses Windows Hello dialog
 - Returns `BiometryType.Auto` as it uses Windows Hello's automatic selection
 
@@ -261,10 +261,10 @@ Common error codes returned by the plugin:
 
 ## Security Considerations
 
-- All secure data is stored in the system keychain (macOS/iOS) or Android Keystore
+- All secure data is stored in the system keychain (macOS/iOS), Android Keystore, or Windows Credential Manager
 - Data is encrypted and can only be accessed after successful biometric authentication
 - The plugin follows platform-specific security best practices
-- Windows currently supports authentication only, not secure data storage
+- Windows uses AES-256 encryption with keys derived from Windows Hello credentials
 - **macOS Code Signing:** Your app must be properly code-signed to use keychain storage on macOS. Development builds may work with ad-hoc signing, but production apps require valid Developer ID or App Store signing
 - Consider implementing additional application-level encryption for highly sensitive data
 
