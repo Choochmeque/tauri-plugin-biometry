@@ -75,8 +75,8 @@ fn nudge_hello_dialog_focus_async(retries: u32, delay_ms: u64) {
 }
 
 /// Create or open a Windows Hello credential
-fn get_credential(name: &str, create_if_missing: bool) -> Result<KeyCredentialRetrievalResult> {
-    let credential_name = HSTRING::from(name);
+fn get_credential(domain: &str, create_if_missing: bool) -> Result<KeyCredentialRetrievalResult> {
+    let credential_name = HSTRING::from(domain);
 
     // Focus the Hello dialog
     nudge_hello_dialog_focus_async(5, 250);
@@ -344,7 +344,7 @@ impl<R: Runtime> Biometry<R> {
         }
 
         // Try to open the credential (without creating)
-        let credential_result = match get_credential(&name, false) {
+        let credential_result = match get_credential(&domain, false) {
             Ok(result) => result,
             Err(_) => return Ok(false),
         };
@@ -370,8 +370,8 @@ impl<R: Runtime> Biometry<R> {
             }))
         })?;
 
-        let resource = HSTRING::from(&name);
-        let username = HSTRING::from(&domain);
+        let resource = HSTRING::from(&domain);
+        let username = HSTRING::from(&name);
 
         // Try to retrieve the credential without the password
         match vault.Retrieve(&resource, &username) {
@@ -395,7 +395,7 @@ impl<R: Runtime> Biometry<R> {
         }
 
         // Try to open the credential (without creating)
-        let credential_result = get_credential(&name, false).map_err(|e| {
+        let credential_result = get_credential(&domain, false).map_err(|e| {
             crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
                 code: Some("credentialNotFound".to_string()),
                 message: Some(format!("Failed to open credential: {:?}", e)),
@@ -430,8 +430,8 @@ impl<R: Runtime> Biometry<R> {
             }))
         })?;
 
-        let resource = HSTRING::from(&name);
-        let username = HSTRING::from(&domain);
+        let resource = HSTRING::from(&domain);
+        let username = HSTRING::from(&name);
 
         // Retrieve the credential with password
         let credential = vault.Retrieve(&resource, &username).map_err(|e| {
@@ -501,7 +501,7 @@ impl<R: Runtime> Biometry<R> {
         }
 
         // Create or replace the credential
-        let credential_result = get_credential(&name, true).map_err(|e| {
+        let credential_result = get_credential(&domain, true).map_err(|e| {
             crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
                 code: Some("credentialCreationFailed".to_string()),
                 message: Some(format!("Failed to create credential: {:?}", e)),
@@ -546,8 +546,8 @@ impl<R: Runtime> Biometry<R> {
             }))
         })?;
 
-        let resource = HSTRING::from(&name);
-        let username = HSTRING::from(&domain);
+        let resource = HSTRING::from(&domain);
+        let username = HSTRING::from(&name);
         let password = HSTRING::from(&encrypted_data);
 
         // Try to remove existing credential if it exists
@@ -602,8 +602,8 @@ impl<R: Runtime> Biometry<R> {
             }))
         })?;
 
-        let resource = HSTRING::from(&name);
-        let username = HSTRING::from(&domain);
+        let resource = HSTRING::from(&domain);
+        let username = HSTRING::from(&name);
 
         // Try to retrieve and remove the credential
         match vault.Retrieve(&resource, &username) {
