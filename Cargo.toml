@@ -27,7 +27,7 @@ objc2-core-foundation = "0.3"
 block2 = "0.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = ["Foundation", "Security_Credentials_UI", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = ["Foundation", "Storage_Streams", "Security_Credentials_UI", "Security_Cryptography_Core", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 tauri-plugin = { version = "2.4.0", features = ["build"] }
