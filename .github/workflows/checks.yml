@@ -17,10 +17,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
-      - run: npm install -g pnpm
+          cache: "pnpm"
       - run: pnpm install
       - run: pnpm run format-check
 
