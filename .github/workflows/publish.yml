@@ -38,6 +38,9 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
 
+      # Install dependencies
+      - run: pnpm install
+
       # Ensure the tag matches package.json version
       - name: Verify version matches tag
         run: |
