@@ -26,16 +26,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       # Node + registry auth
       - uses: actions/setup-node@v5
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-
-      # pnpm
-      - uses: pnpm/action-setup@v4
-        with:
-          run_install: true
+          cache: "pnpm"
 
       # Ensure the tag matches package.json version
       - name: Verify version matches tag
