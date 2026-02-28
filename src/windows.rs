@@ -121,18 +121,8 @@ fn encrypt_data(
     let aes_provider =
         SymmetricKeyAlgorithmProvider::OpenAlgorithm(&SymmetricAlgorithmNames::AesCbcPkcs7()?)?;
 
-    // Generate IV from domain hash
-    let iv_data = CryptographicBuffer::ConvertStringToBinary(
-        &HSTRING::from(format!("IV_{}", domain)),
-        BinaryStringEncoding::Utf8,
-    )?;
-    let iv_hash = hash_provider.HashData(&iv_data)?;
-
-    // Take first 16 bytes of IV hash for AES-128
-    let mut iv_bytes: windows::core::Array<u8> = windows::core::Array::new();
-    CryptographicBuffer::CopyToByteArray(&iv_hash, &mut iv_bytes)?;
-    let iv_slice: Vec<u8> = iv_bytes.as_slice()[..16].to_vec();
-    let iv = CryptographicBuffer::CreateFromByteArray(&iv_slice)?;
+    // Generate a cryptographically random IV (16 bytes for AES-CBC)
+    let iv = CryptographicBuffer::GenerateRandom(16)?;
 
     // Create symmetric key
     let key = aes_provider.CreateSymmetricKey(&key_hash)?;
@@ -141,8 +131,20 @@ fn encrypt_data(
     let data_buffer = CryptographicBuffer::CreateFromByteArray(data)?;
     let encrypted_buffer = CryptographicEngine::Encrypt(&key, &data_buffer, Some(&iv))?;
 
-    // Convert to base64 string
-    Ok(CryptographicBuffer::EncodeToBase64String(&encrypted_buffer)?.to_string())
+    // Prepend IV to ciphertext so it can be extracted during decryption
+    let mut iv_bytes: windows::core::Array<u8> = windows::core::Array::new();
+    CryptographicBuffer::CopyToByteArray(&iv, &mut iv_bytes)?;
+    let mut encrypted_bytes: windows::core::Array<u8> = windows::core::Array::new();
+    CryptographicBuffer::CopyToByteArray(&encrypted_buffer, &mut encrypted_bytes)?;
+
+    let mut combined = Vec::with_capacity(iv_bytes.len() + encrypted_bytes.len());
+    combined.extend_from_slice(iv_bytes.as_slice());
+    combined.extend_from_slice(encrypted_bytes.as_slice());
+
+    let combined_buffer = CryptographicBuffer::CreateFromByteArray(&combined)?;
+
+    // Convert to base64 string (format: base64(IV || ciphertext))
+    Ok(CryptographicBuffer::EncodeToBase64String(&combined_buffer)?.to_string())
 }
 
 /// Decrypt data using Windows Hello credential
@@ -180,26 +182,44 @@ fn decrypt_data(
     let aes_provider =
         SymmetricKeyAlgorithmProvider::OpenAlgorithm(&SymmetricAlgorithmNames::AesCbcPkcs7()?)?;
 
-    // Generate IV from domain hash (same as encryption)
+    // Create symmetric key
+    let key = aes_provider.CreateSymmetricKey(&key_hash)?;
+
+    // Decode from base64
+    let raw_buffer =
+        CryptographicBuffer::DecodeFromBase64String(&HSTRING::from(encrypted_data))?;
+    let mut raw_bytes: windows::core::Array<u8> = windows::core::Array::new();
+    CryptographicBuffer::CopyToByteArray(&raw_buffer, &mut raw_bytes)?;
+
+    // New format: first 16 bytes are the random IV, remainder is ciphertext
+    if raw_bytes.len() > 16 {
+        let iv = CryptographicBuffer::CreateFromByteArray(&raw_bytes.as_slice()[..16])?;
+        let ciphertext =
+            CryptographicBuffer::CreateFromByteArray(&raw_bytes.as_slice()[16..])?;
+
+        if let Ok(decrypted_buffer) =
+            CryptographicEngine::Decrypt(&key, &ciphertext, Some(&iv))
+        {
+            let mut decrypted_bytes: windows::core::Array<u8> = windows::core::Array::new();
+            CryptographicBuffer::CopyToByteArray(&decrypted_buffer, &mut decrypted_bytes)?;
+            return Ok(decrypted_bytes.to_vec());
+        }
+    }
+
+    // Fallback: legacy deterministic IV for data encrypted before this fix
     let iv_data = CryptographicBuffer::ConvertStringToBinary(
         &HSTRING::from(format!("IV_{}", domain)),
         BinaryStringEncoding::Utf8,
     )?;
     let iv_hash = hash_provider.HashData(&iv_data)?;
 
-    // Take first 16 bytes of IV hash for AES-128
     let mut iv_bytes: windows::core::Array<u8> = windows::core::Array::new();
     CryptographicBuffer::CopyToByteArray(&iv_hash, &mut iv_bytes)?;
-    let iv_slice: Vec<u8> = iv_bytes.as_slice()[..16].to_vec();
-    let iv = CryptographicBuffer::CreateFromByteArray(&iv_slice)?;
+    let legacy_iv_slice: Vec<u8> = iv_bytes.as_slice()[..16].to_vec();
+    let legacy_iv = CryptographicBuffer::CreateFromByteArray(&legacy_iv_slice)?;
 
-    // Create symmetric key
-    let key = aes_provider.CreateSymmetricKey(&key_hash)?;
-
-    // Decode from base64 and decrypt
-    let encrypted_buffer =
-        CryptographicBuffer::DecodeFromBase64String(&HSTRING::from(encrypted_data))?;
-    let decrypted_buffer = CryptographicEngine::Decrypt(&key, &encrypted_buffer, Some(&iv))?;
+    let decrypted_buffer =
+        CryptographicEngine::Decrypt(&key, &raw_buffer, Some(&legacy_iv))?;
 
     // Convert to bytes
     let mut decrypted_bytes: windows::core::Array<u8> = windows::core::Array::new();
