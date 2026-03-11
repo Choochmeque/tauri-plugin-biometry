@@ -31,7 +31,7 @@ objc2-security = "0.3"
 block2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Foundation",
     "Storage_Streams",
     "Security_Credentials_UI",
