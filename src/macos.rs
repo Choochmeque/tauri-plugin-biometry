@@ -1,17 +1,16 @@
 use objc2_core_foundation::{
-    kCFBooleanTrue, kCFCopyStringDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFData,
+    kCFCopyStringDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFBoolean, CFData,
     CFDictionary, CFDictionaryKeyCallBacks, CFDictionaryValueCallBacks, CFIndex, CFRetained,
     CFString, CFType,
 };
 use objc2_local_authentication::{LABiometryType, LAContext, LAError, LAPolicy};
 use objc2_security::{
     errSecDuplicateItem, errSecInteractionNotAllowed, errSecItemNotFound, errSecSuccess,
-    errSecUserCanceled, kSecAttrAccessControl, kSecAttrAccessible,
-    kSecAttrAccessibleWhenUnlockedThisDeviceOnly, kSecAttrAccount, kSecAttrService, kSecClass,
-    kSecClassGenericPassword, kSecMatchLimit, kSecMatchLimitOne, kSecReturnData,
-    kSecUseAuthenticationUI, kSecUseAuthenticationUIFail, kSecUseOperationPrompt, kSecValueData,
-    SecAccessControl, SecAccessControlCreateFlags, SecItemAdd, SecItemCopyMatching, SecItemDelete,
-    SecItemUpdate,
+    errSecUserCanceled, kSecAttrAccessControl, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+    kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecMatchLimit,
+    kSecMatchLimitOne, kSecReturnData, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail,
+    kSecUseDataProtectionKeychain, kSecUseOperationPrompt, kSecValueData, SecAccessControl,
+    SecAccessControlCreateFlags, SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
 };
 use serde::de::DeserializeOwned;
 use std::ffi::c_void;
@@ -206,19 +205,33 @@ impl<R: Runtime> Biometry<R> {
             let account_cf: CFRetained<CFString> = CFString::from_str(&options.name);
             let service_cf: CFRetained<CFString> = CFString::from_str(&options.domain);
 
-            let keys: [&CFType; 5] = [
+            // `kSecUseDataProtectionKeychain` opts every SecItem call in
+            // this file into the modern data-protection keychain — the
+            // only backend on macOS that honors `SecAccessControl`
+            // (biometric gating). Without it `secd` falls back to the
+            // legacy file keychain, generates an implicit
+            // `kSecAttrAccess` from `kSecAttrAccessible`, and rejects
+            // writes that also pass `kSecAttrAccessControl` with
+            // errSecParam ("conflicting kSecAccess and
+            // kSecAccessControl attributes"). The flag must be present
+            // on EVERY call (add/copy/update/delete) so they all
+            // address the same backend.
+            let true_ref = CFBoolean::new(true).as_ref();
+            let keys: [&CFType; 6] = [
                 kSecClass.as_ref(),
                 kSecMatchLimit.as_ref(),
                 kSecUseAuthenticationUI.as_ref(),
                 kSecAttrAccount.as_ref(),
                 kSecAttrService.as_ref(),
+                kSecUseDataProtectionKeychain.as_ref(),
             ];
-            let values: [&CFType; 5] = [
+            let values: [&CFType; 6] = [
                 kSecClassGenericPassword.as_ref(),
                 kSecMatchLimitOne.as_ref(),
                 kSecUseAuthenticationUIFail.as_ref(),
                 account_cf.as_ref(),
                 service_cf.as_ref(),
+                true_ref,
             ];
 
             let query = CFDictionary::new(
@@ -261,27 +274,24 @@ impl<R: Runtime> Biometry<R> {
             let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
             let cf_reason: CFRetained<CFString> = CFString::from_str(&options.reason);
 
-            let keys: [&CFType; 6] = [
+            let true_ref = CFBoolean::new(true).as_ref();
+            let keys: [&CFType; 7] = [
                 kSecClass.as_ref(),
                 kSecAttrAccount.as_ref(),
                 kSecAttrService.as_ref(),
                 kSecReturnData.as_ref(),
                 kSecMatchLimit.as_ref(),
                 kSecUseOperationPrompt.as_ref(),
+                kSecUseDataProtectionKeychain.as_ref(),
             ];
-            let values: [&CFType; 6] = [
+            let values: [&CFType; 7] = [
                 kSecClassGenericPassword.as_ref(),
                 cf_account.as_ref(),
                 cf_service.as_ref(),
-                kCFBooleanTrue.as_ref().ok_or_else(|| {
-                    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("internalError".to_string()),
-                        message: Some("Failed to get kCFBooleanTrue reference".to_string()),
-                        data: (),
-                    }))
-                })?,
+                true_ref,
                 kSecMatchLimitOne.as_ref(),
                 cf_reason.as_ref(),
+                true_ref,
             ];
 
             let query = CFDictionary::new(
@@ -381,14 +391,20 @@ impl<R: Runtime> Biometry<R> {
                 }))
             })?;
 
-            // Attributes for SecItemAdd
+            // Attributes for SecItemAdd. The `SecAccessControl` built
+            // above already encodes the accessibility class — passing
+            // `kSecAttrAccessible` here in addition would conflict
+            // (errSecParam, "kSecAccess and kSecAccessControl"). We
+            // also opt into the data-protection keychain so
+            // `kSecAttrAccessControl` is honored.
+            let true_ref = CFBoolean::new(true).as_ref();
             let keys: [&CFType; 6] = [
                 kSecClass.as_ref(),
                 kSecAttrAccount.as_ref(),
                 kSecAttrService.as_ref(),
                 kSecValueData.as_ref(),
                 kSecAttrAccessControl.as_ref(),
-                kSecAttrAccessible.as_ref(),
+                kSecUseDataProtectionKeychain.as_ref(),
             ];
             let values: [&CFType; 6] = [
                 kSecClassGenericPassword.as_ref(),
@@ -396,7 +412,7 @@ impl<R: Runtime> Biometry<R> {
                 cf_service.as_ref(),
                 cf_value.as_ref(),
                 ac_ref.as_ref(),
-                kSecAttrAccessibleWhenUnlockedThisDeviceOnly.as_ref(),
+                true_ref,
             ];
 
             let add_dict = CFDictionary::new(
@@ -417,16 +433,21 @@ impl<R: Runtime> Biometry<R> {
 
             let mut status = SecItemAdd(&add_dict, std::ptr::null_mut());
             if status == errSecDuplicateItem {
-                // Query dict (class + account + service)
-                let q_keys: [&CFType; 3] = [
+                // Query dict (class + account + service). Same backend
+                // opt-in as the add — otherwise SecItemUpdate looks at
+                // the legacy keychain and reports "not found" for an
+                // item that lives in the data-protection backend.
+                let q_keys: [&CFType; 4] = [
                     kSecClass.as_ref(),
                     kSecAttrAccount.as_ref(),
                     kSecAttrService.as_ref(),
+                    kSecUseDataProtectionKeychain.as_ref(),
                 ];
-                let q_vals: [&CFType; 3] = [
+                let q_vals: [&CFType; 4] = [
                     kSecClassGenericPassword.as_ref(),
                     cf_account.as_ref(),
                     cf_service.as_ref(),
+                    true_ref,
                 ];
 
                 let query = CFDictionary::new(
@@ -445,17 +466,13 @@ impl<R: Runtime> Biometry<R> {
                     }))
                 })?;
 
-                // Update dict (value data + access control + accessibility)
-                let u_keys: [&CFType; 3] = [
-                    kSecValueData.as_ref(),
-                    kSecAttrAccessControl.as_ref(),
-                    kSecAttrAccessible.as_ref(),
-                ];
-                let u_vals: [&CFType; 3] = [
-                    cf_value.as_ref(),
-                    ac_ref.as_ref(),
-                    kSecAttrAccessibleWhenUnlockedThisDeviceOnly.as_ref(),
-                ];
+                // Update dict (value data + access control). Same
+                // reasoning as the add path: `SecAccessControl` already
+                // carries the accessibility class, so passing
+                // `kSecAttrAccessible` separately collides with
+                // `kSecAttrAccessControl`.
+                let u_keys: [&CFType; 2] = [kSecValueData.as_ref(), kSecAttrAccessControl.as_ref()];
+                let u_vals: [&CFType; 2] = [cf_value.as_ref(), ac_ref.as_ref()];
 
                 let update_dict = CFDictionary::new(
                     None,
@@ -495,16 +512,23 @@ impl<R: Runtime> Biometry<R> {
             let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
             let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
 
-            // Build immutable CFDictionary with 3 key-value pairs
-            let keys: [&CFType; 3] = [
+            // Build immutable CFDictionary with 4 key-value pairs. The
+            // `kSecUseDataProtectionKeychain` flag matches the
+            // backend the corresponding `set_data` writes into;
+            // without it the delete targets the legacy keychain and
+            // misses items stored under the modern backend.
+            let true_ref = CFBoolean::new(true).as_ref();
+            let keys: [&CFType; 4] = [
                 kSecClass.as_ref(),
                 kSecAttrAccount.as_ref(),
                 kSecAttrService.as_ref(),
+                kSecUseDataProtectionKeychain.as_ref(),
             ];
-            let values: [&CFType; 3] = [
+            let values: [&CFType; 4] = [
                 kSecClassGenericPassword.as_ref(),
                 cf_account.as_ref(),
                 cf_service.as_ref(),
+                true_ref,
             ];
 
             let query = CFDictionary::new(
