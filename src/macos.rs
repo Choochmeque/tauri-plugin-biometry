@@ -14,7 +14,7 @@ use objc2_security::{
 };
 use serde::de::DeserializeOwned;
 use std::ffi::c_void;
-use tauri::{plugin::PluginApi, AppHandle, Runtime};
+use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
 use crate::error::{ErrorResponse, PluginInvokeError};
 use crate::models::*;
@@ -268,7 +268,11 @@ impl<R: Runtime> Biometry<R> {
         }
     }
 
-    pub fn get_data(&self, options: GetDataOptions) -> crate::Result<DataResponse> {
+    pub fn get_data(
+        &self,
+        _window: WebviewWindow<R>,
+        options: GetDataOptions,
+    ) -> crate::Result<DataResponse> {
         unsafe {
             let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
             let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
@@ -370,7 +374,11 @@ impl<R: Runtime> Biometry<R> {
         }
     }
 
-    pub fn set_data(&self, options: SetDataOptions) -> crate::Result<()> {
+    pub fn set_data(
+        &self,
+        _window: WebviewWindow<R>,
+        options: SetDataOptions,
+    ) -> crate::Result<()> {
         unsafe {
             let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
             let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);

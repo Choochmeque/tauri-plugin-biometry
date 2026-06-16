@@ -1,4 +1,4 @@
-use tauri::{command, AppHandle, Runtime};
+use tauri::{command, AppHandle, Runtime, WebviewWindow};
 
 use crate::models::*;
 use crate::{BiometryExt, Result};
@@ -26,13 +26,18 @@ pub(crate) async fn has_data<R: Runtime>(options: DataOptions, app: AppHandle<R>
 pub(crate) async fn get_data<R: Runtime>(
     options: GetDataOptions,
     app: AppHandle<R>,
+    window: WebviewWindow<R>,
 ) -> Result<DataResponse> {
-    app.biometry().get_data(options)
+    app.biometry().get_data(window, options)
 }
 
 #[command]
-pub(crate) async fn set_data<R: Runtime>(options: SetDataOptions, app: AppHandle<R>) -> Result<()> {
-    app.biometry().set_data(options)
+pub(crate) async fn set_data<R: Runtime>(
+    options: SetDataOptions,
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+) -> Result<()> {
+    app.biometry().set_data(window, options)
 }
 
 #[command]

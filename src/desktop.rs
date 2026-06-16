@@ -1,5 +1,5 @@
 use serde::de::DeserializeOwned;
-use tauri::{plugin::PluginApi, AppHandle, Runtime};
+use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
 use crate::models::*;
 
@@ -32,13 +32,21 @@ impl<R: Runtime> Biometry<R> {
         )))
     }
 
-    pub fn get_data(&self, _options: GetDataOptions) -> crate::Result<DataResponse> {
+    pub fn get_data(
+        &self,
+        _window: WebviewWindow<R>,
+        _options: GetDataOptions,
+    ) -> crate::Result<DataResponse> {
         Err(crate::Error::from(std::io::Error::other(
             "Biometry is not supported on this platform",
         )))
     }
 
-    pub fn set_data(&self, _options: SetDataOptions) -> crate::Result<()> {
+    pub fn set_data(
+        &self,
+        _window: WebviewWindow<R>,
+        _options: SetDataOptions,
+    ) -> crate::Result<()> {
         Err(crate::Error::from(std::io::Error::other(
             "Biometry is not supported on this platform",
         )))

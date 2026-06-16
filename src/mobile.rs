@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 use tauri::{
     plugin::{PluginApi, PluginHandle},
-    AppHandle, Runtime,
+    AppHandle, Runtime, WebviewWindow,
 };
 
 use crate::models::*;
@@ -45,13 +45,21 @@ impl<R: Runtime> Biometry<R> {
             .map_err(Into::into)
     }
 
-    pub fn get_data(&self, options: GetDataOptions) -> crate::Result<DataResponse> {
+    pub fn get_data(
+        &self,
+        _window: WebviewWindow<R>,
+        options: GetDataOptions,
+    ) -> crate::Result<DataResponse> {
         self.0
             .run_mobile_plugin("getData", options)
             .map_err(Into::into)
     }
 
-    pub fn set_data(&self, options: SetDataOptions) -> crate::Result<()> {
+    pub fn set_data(
+        &self,
+        _window: WebviewWindow<R>,
+        options: SetDataOptions,
+    ) -> crate::Result<()> {
         self.0
             .run_mobile_plugin("setData", options)
             .map_err(Into::into)
