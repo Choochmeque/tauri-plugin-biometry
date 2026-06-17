@@ -63,19 +63,17 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
     Ok(Biometry(app.clone()))
 }
 
-#[inline]
-fn to_wide_z(s: &str) -> Vec<u16> {
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
 struct WideStr(Vec<u16>);
 impl WideStr {
     fn new(s: &str) -> Self {
-        Self(to_wide_z(s))
+        Self(
+            std::ffi::OsStr::new(s)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect(),
+        )
     }
+
     fn pcwstr(&self) -> PCWSTR {
         PCWSTR(self.0.as_ptr())
     }
