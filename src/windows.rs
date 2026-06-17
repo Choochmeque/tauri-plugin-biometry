@@ -21,8 +21,11 @@ use windows::{
     Win32::Networking::WindowsWebServices::{
         WebAuthNAuthenticatorGetAssertion, WebAuthNAuthenticatorMakeCredential,
         WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation,
+        WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
         WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS, WEBAUTHN_CLIENT_DATA,
+        WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
+        WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256,
         WEBAUTHN_COSE_CREDENTIAL_PARAMETER, WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
         WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_LIST, WEBAUTHN_EXTENSION, WEBAUTHN_EXTENSIONS,
         WEBAUTHN_HMAC_SECRET_SALT, WEBAUTHN_HMAC_SECRET_SALT_VALUES,
@@ -55,10 +58,6 @@ const RP_ENTITY_VERSION: u32 = 1;
 const USER_ENTITY_VERSION: u32 = 1;
 const COSE_CRED_PARAM_VERSION: u32 = 1;
 const CRED_EX_VERSION: u32 = 1;
-
-const COSE_ALG_ES256: i32 = -7;
-const COSE_ALG_RS256: i32 = -257;
-const ATTESTATION_NONE: u32 = 0;
 
 // Signature must match the cross-platform plugin contract — return type is
 // fixed even though Windows init can't fail.
@@ -248,12 +247,12 @@ fn make_webauthn_credential(
         WEBAUTHN_COSE_CREDENTIAL_PARAMETER {
             dwVersion: COSE_CRED_PARAM_VERSION,
             pwszCredentialType: public_key_type_w.pcwstr(),
-            lAlg: COSE_ALG_ES256,
+            lAlg: WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
         },
         WEBAUTHN_COSE_CREDENTIAL_PARAMETER {
             dwVersion: COSE_CRED_PARAM_VERSION,
             pwszCredentialType: public_key_type_w.pcwstr(),
-            lAlg: COSE_ALG_RS256,
+            lAlg: WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256,
         },
     ];
     let cred_params = WEBAUTHN_COSE_CREDENTIAL_PARAMETERS {
@@ -280,7 +279,7 @@ fn make_webauthn_credential(
     options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM;
     options.bRequireResidentKey = BOOL(0);
     options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
-    options.dwAttestationConveyancePreference = ATTESTATION_NONE;
+    options.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
     options.dwFlags = 0;
 
     nudge_hello_dialog_focus_async(5, 250);
