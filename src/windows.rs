@@ -12,7 +12,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
 use windows::{
-    core::{Error as WinError, BOOL, HRESULT, HSTRING, PCWSTR},
+    core::{Error as WinError, BOOL, GUID, HRESULT, HSTRING, PCWSTR},
     Security::Credentials::UI::{
         UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
     },
@@ -24,13 +24,12 @@ use windows::{
         WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
         WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6,
-        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS,
-        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_3, WEBAUTHN_CLIENT_DATA,
+        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS, WEBAUTHN_CLIENT_DATA,
         WEBAUTHN_CLIENT_DATA_CURRENT_VERSION, WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
         WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
         WEBAUTHN_COSE_CREDENTIAL_PARAMETERS, WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
-        WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_LIST,
-        WEBAUTHN_EXTENSION, WEBAUTHN_EXTENSIONS, WEBAUTHN_HMAC_SECRET_SALT,
+        WEBAUTHN_CREDENTIALS, WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION,
+        WEBAUTHN_CREDENTIAL_LIST, WEBAUTHN_EXTENSIONS, WEBAUTHN_HMAC_SECRET_SALT,
         WEBAUTHN_HMAC_SECRET_SALT_VALUES, WEBAUTHN_RP_ENTITY_INFORMATION,
         WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION, WEBAUTHN_USER_ENTITY_INFORMATION,
         WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
@@ -169,11 +168,88 @@ fn aad_for(credential_id: &[u8]) -> Vec<u8> {
 
 // -------------------- WebAuthn helpers --------------------
 
-fn make_webauthn_credential(
+// Hand-rolled WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS at version 8.
+// `windows` 0.61 only models fields up through v6 (ending at `bEnablePrf`),
+// but we need v8's `pPRFGlobalEval` to evaluate the PRF at credential
+// creation and avoid a second Hello prompt for the initial setData. Layout
+// must match webauthn.h exactly.
+#[repr(C)]
+#[allow(non_snake_case)]
+struct MakeCredOptionsV8 {
+    dwVersion: u32,
+    dwTimeoutMilliseconds: u32,
+    CredentialList: WEBAUTHN_CREDENTIALS,
+    Extensions: WEBAUTHN_EXTENSIONS,
+    dwAuthenticatorAttachment: u32,
+    bRequireResidentKey: BOOL,
+    dwUserVerificationRequirement: u32,
+    dwAttestationConveyancePreference: u32,
+    dwFlags: u32,
+    // v2+
+    pCancellationId: *mut GUID,
+    // v3+
+    pExcludeCredentialList: *mut WEBAUTHN_CREDENTIAL_LIST,
+    // v4+
+    dwEnterpriseAttestation: u32,
+    dwLargeBlobSupport: u32,
+    bPreferResidentKey: BOOL,
+    // v5+
+    bBrowserInPrivateMode: BOOL,
+    // v6+
+    bEnablePrf: BOOL,
+    // v7+
+    pLinkedDevice: *mut c_void,
+    cbJsonExt: u32,
+    pbJsonExt: *mut u8,
+    // v8+
+    pPRFGlobalEval: *mut WEBAUTHN_HMAC_SECRET_SALT,
+    cCredentialHints: u32,
+    ppwszCredentialHints: *mut PCWSTR,
+    bThirdPartyPayment: BOOL,
+}
+
+// Hand-rolled WEBAUTHN_CREDENTIAL_ATTESTATION at v7+ so we can read
+// `pHmacSecret`, which is where webauthn.dll places the PRF output produced
+// by `pPRFGlobalEval` at create time. windows-rs stops at the v6 layout.
+#[repr(C)]
+#[allow(non_snake_case)]
+struct CredentialAttestationV7 {
+    dwVersion: u32,
+    pwszFormatType: PCWSTR,
+    cbAuthenticatorData: u32,
+    pbAuthenticatorData: *mut u8,
+    cbAttestation: u32,
+    pbAttestation: *mut u8,
+    dwAttestationDecodeType: u32,
+    pvAttestationDecode: *mut c_void,
+    cbAttestationObject: u32,
+    pbAttestationObject: *mut u8,
+    cbCredentialId: u32,
+    pbCredentialId: *mut u8,
+    Extensions: WEBAUTHN_EXTENSIONS,
+    dwUsedTransport: u32,
+    bEpAtt: BOOL,
+    bLargeBlobSupported: BOOL,
+    bResidentKey: BOOL,
+    bPrfEnabled: BOOL,
+    cbUnsignedExtensionOutputs: u32,
+    pbUnsignedExtensionOutputs: *mut u8,
+    // v7+
+    pHmacSecret: *mut WEBAUTHN_HMAC_SECRET_SALT,
+    bThirdPartyPayment: BOOL,
+}
+
+const MAKE_CRED_OPTIONS_VERSION_8: u32 = 8;
+
+// Creates a Hello-bound credential AND evaluates the PRF for `salt` in the
+// same operation — collapses the prior MakeCredential + GetAssertion pair
+// into one Hello prompt for first-time enrollment of a domain.
+fn make_webauthn_credential_with_prf(
     hwnd: HWND,
     rp_id_str: &str,
     user_label: &str,
-) -> Result<Vec<u8>, WinError> {
+    salt: &[u8; PRF_SALT_LEN],
+) -> Result<(Vec<u8>, [u8; PRF_OUT_LEN]), WinError> {
     let rp_id_w = WideStr::new(rp_id_str);
     let rp_name_w = WideStr::new(rp_id_str);
     let rp = WEBAUTHN_RP_ENTITY_INFORMATION {
@@ -228,27 +304,28 @@ fn make_webauthn_credential(
         pCredentialParameters: params.as_mut_ptr(),
     };
 
-    let hmac_secret_id_w = WideStr::new("hmac-secret");
-    let mut hmac_enable: BOOL = BOOL(1);
-    let mut ext_list = [WEBAUTHN_EXTENSION {
-        pwszExtensionIdentifier: hmac_secret_id_w.pcwstr(),
-        cbExtension: u32_len(std::mem::size_of::<BOOL>())?,
-        pvExtension: std::ptr::addr_of_mut!(hmac_enable).cast::<c_void>(),
-    }];
-    let extensions = WEBAUTHN_EXTENSIONS {
-        cExtensions: 1,
-        pExtensions: ext_list.as_mut_ptr(),
+    // PRF eval input — populated into pPRFGlobalEval below.
+    let mut salt_bytes = salt.to_vec();
+    let mut prf_eval = WEBAUTHN_HMAC_SECRET_SALT {
+        cbFirst: 32,
+        pbFirst: salt_bytes.as_mut_ptr(),
+        cbSecond: 0,
+        pbSecond: ptr::null_mut(),
     };
 
-    let mut options: WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS = unsafe { std::mem::zeroed() };
-    options.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_3;
+    let mut options: MakeCredOptionsV8 = unsafe { std::mem::zeroed() };
+    options.dwVersion = MAKE_CRED_OPTIONS_VERSION_8;
     options.dwTimeoutMilliseconds = WEBAUTHN_TIMEOUT_MS;
-    options.Extensions = extensions;
     options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM;
     options.bRequireResidentKey = BOOL(0);
     options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
     options.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
     options.dwFlags = 0;
+    options.bEnablePrf = BOOL(1);
+    options.pPRFGlobalEval = &mut prf_eval;
+
+    let options_ptr =
+        std::ptr::addr_of!(options).cast::<WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS>();
 
     let attestation_ptr = unsafe {
         WebAuthNAuthenticatorMakeCredential(
@@ -257,7 +334,7 @@ fn make_webauthn_credential(
             &user,
             &cred_params,
             &client_data,
-            Some(&options),
+            Some(options_ptr),
         )?
     };
 
@@ -266,15 +343,33 @@ fn make_webauthn_credential(
     }
 
     let result = unsafe {
-        let att = &*attestation_ptr;
+        let att = &*attestation_ptr.cast::<CredentialAttestationV7>();
+        if att.dwVersion < 7 {
+            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
+            return Err(WinError::from(HRESULT(-1)));
+        }
         if att.pbCredentialId.is_null() || att.cbCredentialId == 0 {
             WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
             return Err(WinError::from(HRESULT(-1)));
         }
-        let slice = std::slice::from_raw_parts(att.pbCredentialId, att.cbCredentialId as usize);
-        let v = slice.to_vec();
+        let cred_slice =
+            std::slice::from_raw_parts(att.pbCredentialId, att.cbCredentialId as usize);
+        let credential_id = cred_slice.to_vec();
+
+        if att.pHmacSecret.is_null() {
+            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
+            return Err(WinError::from(HRESULT(-1)));
+        }
+        let hmac = &*att.pHmacSecret;
+        if hmac.pbFirst.is_null() || hmac.cbFirst as usize != PRF_OUT_LEN {
+            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
+            return Err(WinError::from(HRESULT(-1)));
+        }
+        let mut prf_out = [0u8; PRF_OUT_LEN];
+        std::ptr::copy_nonoverlapping(hmac.pbFirst, prf_out.as_mut_ptr(), PRF_OUT_LEN);
+
         WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
-        v
+        (credential_id, prf_out)
     };
 
     Ok(result)
@@ -593,20 +688,23 @@ impl<R: Runtime> Biometry<R> {
 
         let rp_id_str = rp_id_for(&self.0.config().identifier, &domain);
 
-        let credential_id = match find_existing_credential_id_for_domain(&domain) {
-            Some(id) => id,
-            None => make_webauthn_credential(hwnd, &rp_id_str, &name).map_err(|e| {
-                reject_fmt("credentialCreationFailed", "webauthn make credential", &e)
-            })?,
-        };
-
         let mut salt = [0u8; PRF_SALT_LEN];
         rand::thread_rng().fill_bytes(&mut salt);
         let mut iv = [0u8; AES_GCM_NONCE_LEN];
         rand::thread_rng().fill_bytes(&mut iv);
 
-        let prf_out = get_assertion_prf(hwnd, &rp_id_str, &credential_id, &salt)
-            .map_err(|e| reject_fmt("authenticationFailed", "webauthn assertion", &e))?;
+        let (credential_id, prf_out) = match find_existing_credential_id_for_domain(&domain) {
+            Some(id) => {
+                let prf = get_assertion_prf(hwnd, &rp_id_str, &id, &salt)
+                    .map_err(|e| reject_fmt("authenticationFailed", "webauthn assertion", &e))?;
+                (id, prf)
+            }
+            None => {
+                make_webauthn_credential_with_prf(hwnd, &rp_id_str, &name, &salt).map_err(|e| {
+                    reject_fmt("credentialCreationFailed", "webauthn make credential", &e)
+                })?
+            }
+        };
 
         let cipher = Aes256Gcm::new_from_slice(&prf_out)
             .map_err(|e| reject("internalError", &format!("aes key init: {e}")))?;
