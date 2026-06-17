@@ -1,24 +1,29 @@
 use objc2_core_foundation::{
     kCFCopyStringDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFBoolean, CFData,
-    CFDictionary, CFDictionaryKeyCallBacks, CFDictionaryValueCallBacks, CFIndex, CFRetained,
-    CFString, CFType,
+    CFDictionary, CFIndex, CFRetained, CFString, CFType,
 };
 use objc2_local_authentication::{LABiometryType, LAContext, LAError, LAPolicy};
 use objc2_security::{
     errSecDuplicateItem, errSecInteractionNotAllowed, errSecItemNotFound, errSecSuccess,
     errSecUserCanceled, kSecAttrAccessControl, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
     kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecMatchLimit,
-    kSecMatchLimitOne, kSecReturnData, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail,
-    kSecUseDataProtectionKeychain, kSecUseOperationPrompt, kSecValueData, SecAccessControl,
-    SecAccessControlCreateFlags, SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
+    kSecMatchLimitOne, kSecReturnData, kSecUseAuthenticationContext, kSecUseDataProtectionKeychain,
+    kSecValueData, SecAccessControl, SecAccessControlCreateFlags, SecItemAdd, SecItemCopyMatching,
+    SecItemDelete, SecItemUpdate,
 };
 use serde::de::DeserializeOwned;
 use std::ffi::c_void;
-use tauri::{plugin::PluginApi, AppHandle, Runtime};
+use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
 use crate::error::{ErrorResponse, PluginInvokeError};
-use crate::models::*;
+use crate::models::{
+    AuthOptions, BiometryType, DataOptions, DataResponse, GetDataOptions, RemoveDataOptions,
+    SetDataOptions, Status,
+};
 
+// Signature must match the cross-platform plugin contract — return type is
+// fixed even though macOS init can't fail.
+#[allow(clippy::unnecessary_wraps)]
 pub fn init<R: Runtime, C: DeserializeOwned>(
     app: &AppHandle<R>,
     _api: PluginApi<R, C>,
@@ -26,7 +31,20 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
     Ok(Biometry(app.clone()))
 }
 
-fn la_error_to_string(error: LAError) -> &'static str {
+fn reject(code: &str, message: &str) -> crate::Error {
+    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
+        code: Some(code.to_string()),
+        message: Some(message.to_string()),
+        data: (),
+    }))
+}
+
+fn cf_len(n: usize) -> crate::Result<CFIndex> {
+    CFIndex::try_from(n)
+        .map_err(|_| reject("internalError", "CF array length does not fit in CFIndex"))
+}
+
+const fn la_error_to_string(error: LAError) -> &'static str {
     match error {
         LAError::AppCancel => "appCancel",
         LAError::AuthenticationFailed => "authenticationFailed",
@@ -47,6 +65,9 @@ fn la_error_to_string(error: LAError) -> &'static str {
 pub struct Biometry<R: Runtime>(AppHandle<R>);
 
 impl<R: Runtime> Biometry<R> {
+    // macOS uses global LAContext/Keychain APIs, so methods don't need
+    // per-instance state. Signatures match the cross-platform shape.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     pub fn status(&self) -> crate::Result<Status> {
         let context = unsafe { LAContext::new() };
 
@@ -57,27 +78,22 @@ impl<R: Runtime> Biometry<R> {
         let biometry_type = unsafe { context.biometryType() };
 
         let is_available = can_evaluate.is_ok();
-        let mut error_reason: Option<String> = None;
-        let mut error_code: Option<String> = None;
-
-        if let Err(error) = can_evaluate {
+        let (error_reason, error_code) = if let Err(error) = can_evaluate {
             let ns_error = &*error;
-
-            // Get error description
             let description = ns_error.localizedDescription();
-            error_reason = Some(description.to_string());
-
-            // Map error code to string representation
             let code = LAError(ns_error.code());
-            error_code = Some(la_error_to_string(code).to_string());
-        }
+            (
+                Some(description.to_string()),
+                Some(la_error_to_string(code).to_string()),
+            )
+        } else {
+            (None, None)
+        };
 
         // Map LABiometryType to our BiometryType enum
         let mapped_biometry_type = match biometry_type {
-            LABiometryType::None => BiometryType::None,
             LABiometryType::TouchID => BiometryType::TouchID,
             LABiometryType::FaceID => BiometryType::FaceID,
-            #[allow(unreachable_patterns)]
             _ => BiometryType::None,
         };
 
@@ -89,7 +105,13 @@ impl<R: Runtime> Biometry<R> {
         })
     }
 
-    pub fn authenticate(&self, reason: String, options: AuthOptions) -> crate::Result<()> {
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    pub fn authenticate(
+        &self,
+        _window: WebviewWindow<R>,
+        reason: String,
+        options: AuthOptions,
+    ) -> crate::Result<()> {
         let context = unsafe { LAContext::new() };
 
         // Check if biometry is available or device credential is allowed
@@ -107,13 +129,7 @@ impl<R: Runtime> Biometry<R> {
                 let code = LAError(ns_error.code());
                 let error_code = la_error_to_string(code);
 
-                return Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some(error_code.to_string()),
-                        message: Some(description.to_string()),
-                        data: (),
-                    }),
-                ));
+                return Err(reject(error_code, &description.to_string()));
             }
         }
 
@@ -150,7 +166,6 @@ impl<R: Runtime> Biometry<R> {
         // Perform authentication
         unsafe {
             let reason_str = objc2_foundation::NSString::from_str(&reason);
-            let tx_clone = tx.clone();
 
             context.evaluatePolicy_localizedReason_reply(
                 policy,
@@ -159,28 +174,16 @@ impl<R: Runtime> Biometry<R> {
                     move |success: objc2::runtime::Bool,
                           error_ptr: *mut objc2_foundation::NSError| {
                         if success.as_bool() {
-                            let _ = tx_clone.send(Ok(()));
+                            let _ = tx.send(Ok(()));
                         } else if !error_ptr.is_null() {
                             let error = &*error_ptr;
                             let description = error.localizedDescription().to_string();
                             let code = LAError(error.code());
                             let error_code = la_error_to_string(code);
 
-                            let _ = tx_clone.send(Err(crate::Error::PluginInvoke(
-                                PluginInvokeError::InvokeRejected(ErrorResponse {
-                                    code: Some(error_code.to_string()),
-                                    message: Some(description),
-                                    data: (),
-                                }),
-                            )));
+                            let _ = tx.send(Err(reject(error_code, &description)));
                         } else {
-                            let _ = tx_clone.send(Err(crate::Error::PluginInvoke(
-                                PluginInvokeError::InvokeRejected(ErrorResponse {
-                                    code: Some("authenticationFailed".to_string()),
-                                    message: Some("Unknown error".to_string()),
-                                    data: (),
-                                }),
-                            )));
+                            let _ = tx.send(Err(reject("authenticationFailed", "Unknown error")));
                         }
                     },
                 ),
@@ -188,18 +191,15 @@ impl<R: Runtime> Biometry<R> {
         }
 
         // Wait for authentication result
-        match rx.recv() {
-            Ok(result) => result,
-            Err(_) => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("authenticationFailed".to_string()),
-                    message: Some("Failed to receive authentication result".to_string()),
-                    data: (),
-                }),
-            )),
-        }
+        rx.recv().unwrap_or_else(|_| {
+            Err(reject(
+                "authenticationFailed",
+                "Failed to receive authentication result",
+            ))
+        })
     }
 
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
     pub fn has_data(&self, options: DataOptions) -> crate::Result<bool> {
         unsafe {
             let account_cf: CFRetained<CFString> = CFString::from_str(&options.name);
@@ -216,11 +216,19 @@ impl<R: Runtime> Biometry<R> {
             // kSecAccessControl attributes"). The flag must be present
             // on EVERY call (add/copy/update/delete) so they all
             // address the same backend.
+            // Replaces the deprecated kSecUseAuthenticationUI=Fail dance:
+            // an LAContext with interactionNotAllowed=true makes
+            // SecItemCopyMatching return errSecInteractionNotAllowed
+            // instead of prompting, which is exactly what has_data needs.
+            let auth_ctx = LAContext::new();
+            auth_ctx.setInteractionNotAllowed(true);
+            let auth_ctx_cf: &CFType = &*std::ptr::addr_of!(*auth_ctx).cast::<CFType>();
+
             let true_ref = CFBoolean::new(true).as_ref();
             let keys: [&CFType; 6] = [
                 kSecClass.as_ref(),
                 kSecMatchLimit.as_ref(),
-                kSecUseAuthenticationUI.as_ref(),
+                kSecUseAuthenticationContext.as_ref(),
                 kSecAttrAccount.as_ref(),
                 kSecAttrService.as_ref(),
                 kSecUseDataProtectionKeychain.as_ref(),
@@ -228,7 +236,7 @@ impl<R: Runtime> Biometry<R> {
             let values: [&CFType; 6] = [
                 kSecClassGenericPassword.as_ref(),
                 kSecMatchLimitOne.as_ref(),
-                kSecUseAuthenticationUIFail.as_ref(),
+                auth_ctx_cf,
                 account_cf.as_ref(),
                 service_cf.as_ref(),
                 true_ref,
@@ -236,19 +244,13 @@ impl<R: Runtime> Biometry<R> {
 
             let query = CFDictionary::new(
                 None,
-                keys.as_ptr() as *mut *const c_void,
-                values.as_ptr() as *mut *const c_void,
-                keys.len() as CFIndex,
-                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
-                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                keys.as_ptr().cast::<*const c_void>().cast_mut(),
+                values.as_ptr().cast::<*const c_void>().cast_mut(),
+                cf_len(keys.len())?,
+                std::ptr::addr_of!(kCFCopyStringDictionaryKeyCallBacks),
+                std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
             )
-            .ok_or_else(|| {
-                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("internalError".to_string()),
-                    message: Some("Failed to create CFDictionary for query".to_string()),
-                    data: (),
-                }))
-            })?;
+            .ok_or_else(|| reject("internalError", "Failed to create CFDictionary for query"))?;
 
             let status = SecItemCopyMatching(&query, std::ptr::null_mut());
 
@@ -257,22 +259,31 @@ impl<R: Runtime> Biometry<R> {
             } else if status == errSecItemNotFound {
                 Ok(false)
             } else {
-                Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("keychainError".to_string()),
-                        message: Some(format!("SecItemCopyMatching failed with status: {status}")),
-                        data: (),
-                    }),
+                Err(reject(
+                    "keychainError",
+                    &format!("SecItemCopyMatching failed with status: {status}"),
                 ))
             }
         }
     }
 
-    pub fn get_data(&self, options: GetDataOptions) -> crate::Result<DataResponse> {
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    pub fn get_data(
+        &self,
+        _window: WebviewWindow<R>,
+        options: GetDataOptions,
+    ) -> crate::Result<DataResponse> {
         unsafe {
             let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
             let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
-            let cf_reason: CFRetained<CFString> = CFString::from_str(&options.reason);
+
+            // Replaces the deprecated kSecUseOperationPrompt: an LAContext
+            // with localizedReason set carries the prompt text through
+            // kSecUseAuthenticationContext.
+            let auth_ctx = LAContext::new();
+            let reason_ns = objc2_foundation::NSString::from_str(&options.reason);
+            auth_ctx.setLocalizedReason(&reason_ns);
+            let auth_ctx_cf: &CFType = &*std::ptr::addr_of!(*auth_ctx).cast::<CFType>();
 
             let true_ref = CFBoolean::new(true).as_ref();
             let keys: [&CFType; 7] = [
@@ -281,7 +292,7 @@ impl<R: Runtime> Biometry<R> {
                 kSecAttrService.as_ref(),
                 kSecReturnData.as_ref(),
                 kSecMatchLimit.as_ref(),
-                kSecUseOperationPrompt.as_ref(),
+                kSecUseAuthenticationContext.as_ref(),
                 kSecUseDataProtectionKeychain.as_ref(),
             ];
             let values: [&CFType; 7] = [
@@ -290,32 +301,31 @@ impl<R: Runtime> Biometry<R> {
                 cf_service.as_ref(),
                 true_ref,
                 kSecMatchLimitOne.as_ref(),
-                cf_reason.as_ref(),
+                auth_ctx_cf,
                 true_ref,
             ];
 
             let query = CFDictionary::new(
                 None,
-                keys.as_ptr() as *mut *const c_void,
-                values.as_ptr() as *mut *const c_void,
-                keys.len() as CFIndex,
-                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
-                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                keys.as_ptr().cast::<*const c_void>().cast_mut(),
+                values.as_ptr().cast::<*const c_void>().cast_mut(),
+                cf_len(keys.len())?,
+                std::ptr::addr_of!(kCFCopyStringDictionaryKeyCallBacks),
+                std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
             )
-            .ok_or_else(|| {
-                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("internalError".to_string()),
-                    message: Some("Failed to create CFDictionary for query".to_string()),
-                    data: (),
-                }))
-            })?;
+            .ok_or_else(|| reject("internalError", "Failed to create CFDictionary for query"))?;
 
             let mut out: *const CFType = std::ptr::null();
             let status = SecItemCopyMatching(&query, &mut out);
 
             if status == errSecSuccess {
-                if !out.is_null() {
-                    let cf_data: &CFData = &*(out as *const CFData);
+                if out.is_null() {
+                    Err(reject(
+                        "dataError",
+                        "SecItemCopyMatching returned null data",
+                    ))
+                } else {
+                    let cf_data: &CFData = &*out.cast::<CFData>();
                     let bytes = cf_data.byte_ptr();
                     let data = std::slice::from_raw_parts(bytes, cf_data.len() as usize);
                     Ok(DataResponse {
@@ -323,54 +333,38 @@ impl<R: Runtime> Biometry<R> {
                         name: options.name,
                         data: String::from_utf8_lossy(data).to_string(),
                     })
-                } else {
-                    Err(crate::Error::PluginInvoke(
-                        PluginInvokeError::InvokeRejected(ErrorResponse {
-                            code: Some("dataError".to_string()),
-                            message: Some("SecItemCopyMatching returned null data".to_string()),
-                            data: (),
-                        }),
-                    ))
                 }
             } else if status == errSecItemNotFound {
-                return Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("itemNotFound".to_string()),
-                        message: Some(format!("Error retrieving item from keychain: {status}")),
-                        data: (),
-                    }),
-                ));
+                Err(reject(
+                    "itemNotFound",
+                    &format!("Error retrieving item from keychain: {status}"),
+                ))
             } else if status == errSecUserCanceled {
-                return Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("userCancel".to_string()),
-                        message: Some("User canceled".to_string()),
-                        data: (),
-                    }),
-                ));
+                Err(reject("userCancel", "User canceled"))
             } else if status == errSecInteractionNotAllowed {
-                return Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("authenticationRequired".to_string()),
-                        message: Some(
-                            "Authentication required but UI interaction is not allowed".to_string(),
-                        ),
-                        data: (),
-                    }),
-                ));
+                Err(reject(
+                    "authenticationRequired",
+                    "Authentication required but UI interaction is not allowed",
+                ))
             } else {
-                return Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("keychainError".to_string()),
-                        message: Some(format!("Error retrieving item from keychain: {status}")),
-                        data: (),
-                    }),
-                ));
+                Err(reject(
+                    "keychainError",
+                    &format!("Error retrieving item from keychain: {status}"),
+                ))
             }
         }
     }
 
-    pub fn set_data(&self, options: SetDataOptions) -> crate::Result<()> {
+    #[allow(
+        clippy::unused_self,
+        clippy::needless_pass_by_value,
+        clippy::too_many_lines
+    )]
+    pub fn set_data(
+        &self,
+        _window: WebviewWindow<R>,
+        options: SetDataOptions,
+    ) -> crate::Result<()> {
         unsafe {
             let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
             let cf_service: CFRetained<CFString> = CFString::from_str(&options.domain);
@@ -383,13 +377,7 @@ impl<R: Runtime> Biometry<R> {
                 SecAccessControlCreateFlags::UserPresence,
                 std::ptr::null_mut(),
             )
-            .ok_or_else(|| {
-                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("internalError".to_string()),
-                    message: Some("Failed to create SecAccessControl".to_string()),
-                    data: (),
-                }))
-            })?;
+            .ok_or_else(|| reject("internalError", "Failed to create SecAccessControl"))?;
 
             // Attributes for SecItemAdd. The `SecAccessControl` built
             // above already encodes the accessibility class — passing
@@ -417,18 +405,17 @@ impl<R: Runtime> Biometry<R> {
 
             let add_dict = CFDictionary::new(
                 None,
-                keys.as_ptr() as *mut *const c_void,
-                values.as_ptr() as *mut *const c_void,
-                keys.len() as CFIndex,
-                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
-                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                keys.as_ptr().cast::<*const c_void>().cast_mut(),
+                values.as_ptr().cast::<*const c_void>().cast_mut(),
+                cf_len(keys.len())?,
+                std::ptr::addr_of!(kCFCopyStringDictionaryKeyCallBacks),
+                std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
             )
             .ok_or_else(|| {
-                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("internalError".to_string()),
-                    message: Some("Failed to create CFDictionary for add_dict".to_string()),
-                    data: (),
-                }))
+                reject(
+                    "internalError",
+                    "Failed to create CFDictionary for add_dict",
+                )
             })?;
 
             let mut status = SecItemAdd(&add_dict, std::ptr::null_mut());
@@ -452,18 +439,17 @@ impl<R: Runtime> Biometry<R> {
 
                 let query = CFDictionary::new(
                     None,
-                    q_keys.as_ptr() as *mut *const c_void,
-                    q_vals.as_ptr() as *mut *const c_void,
-                    q_keys.len() as CFIndex,
-                    &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
-                    &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                    q_keys.as_ptr().cast::<*const c_void>().cast_mut(),
+                    q_vals.as_ptr().cast::<*const c_void>().cast_mut(),
+                    cf_len(q_keys.len())?,
+                    std::ptr::addr_of!(kCFCopyStringDictionaryKeyCallBacks),
+                    std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
                 )
                 .ok_or_else(|| {
-                    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("internalError".to_string()),
-                        message: Some("Failed to create CFDictionary for update query".to_string()),
-                        data: (),
-                    }))
+                    reject(
+                        "internalError",
+                        "Failed to create CFDictionary for update query",
+                    )
                 })?;
 
                 // Update dict (value data + access control). Same
@@ -476,18 +462,17 @@ impl<R: Runtime> Biometry<R> {
 
                 let update_dict = CFDictionary::new(
                     None,
-                    u_keys.as_ptr() as *mut *const c_void,
-                    u_vals.as_ptr() as *mut *const c_void,
-                    u_keys.len() as CFIndex,
-                    &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
-                    &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                    u_keys.as_ptr().cast::<*const c_void>().cast_mut(),
+                    u_vals.as_ptr().cast::<*const c_void>().cast_mut(),
+                    cf_len(u_keys.len())?,
+                    std::ptr::addr_of!(kCFCopyStringDictionaryKeyCallBacks),
+                    std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
                 )
                 .ok_or_else(|| {
-                    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("internalError".to_string()),
-                        message: Some("Failed to create CFDictionary for update_dict".to_string()),
-                        data: (),
-                    }))
+                    reject(
+                        "internalError",
+                        "Failed to create CFDictionary for update_dict",
+                    )
                 })?;
 
                 status = SecItemUpdate(&query, &update_dict);
@@ -496,17 +481,15 @@ impl<R: Runtime> Biometry<R> {
             if status == errSecSuccess {
                 Ok(())
             } else {
-                Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("keychainError".to_string()),
-                        message: Some(format!("Error adding item to keychain: {status}")),
-                        data: (),
-                    }),
+                Err(reject(
+                    "keychainError",
+                    &format!("Error adding item to keychain: {status}"),
                 ))
             }
         }
     }
 
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
     pub fn remove_data(&self, options: RemoveDataOptions) -> crate::Result<()> {
         unsafe {
             let cf_account: CFRetained<CFString> = CFString::from_str(&options.name);
@@ -533,18 +516,17 @@ impl<R: Runtime> Biometry<R> {
 
             let query = CFDictionary::new(
                 None,
-                keys.as_ptr() as *mut *const c_void,
-                values.as_ptr() as *mut *const c_void,
-                keys.len() as CFIndex,
-                &kCFCopyStringDictionaryKeyCallBacks as *const CFDictionaryKeyCallBacks,
-                &kCFTypeDictionaryValueCallBacks as *const CFDictionaryValueCallBacks,
+                keys.as_ptr().cast::<*const c_void>().cast_mut(),
+                values.as_ptr().cast::<*const c_void>().cast_mut(),
+                cf_len(keys.len())?,
+                std::ptr::addr_of!(kCFCopyStringDictionaryKeyCallBacks),
+                std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks),
             )
             .ok_or_else(|| {
-                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("internalError".to_string()),
-                    message: Some("Failed to create CFDictionary for delete query".to_string()),
-                    data: (),
-                }))
+                reject(
+                    "internalError",
+                    "Failed to create CFDictionary for delete query",
+                )
             })?;
 
             let status = SecItemDelete(&query);
@@ -552,12 +534,9 @@ impl<R: Runtime> Biometry<R> {
             if status == errSecSuccess || status == errSecItemNotFound {
                 Ok(())
             } else {
-                Err(crate::Error::PluginInvoke(
-                    PluginInvokeError::InvokeRejected(ErrorResponse {
-                        code: Some("keychainError".to_string()),
-                        message: Some(format!("Error deleting item from keychain: {status}")),
-                        data: (),
-                    }),
+                Err(reject(
+                    "keychainError",
+                    &format!("Error deleting item from keychain: {status}"),
                 ))
             }
         }

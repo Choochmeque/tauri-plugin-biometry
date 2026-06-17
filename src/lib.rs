@@ -17,8 +17,10 @@ mod windows;
 mod commands;
 mod error;
 mod models;
+mod scope;
 
 pub use error::{Error, Result};
+pub use scope::Entry as ScopeEntry;
 
 #[cfg(all(desktop, not(target_os = "windows"), not(target_os = "macos")))]
 use desktop::Biometry;
@@ -41,6 +43,7 @@ impl<R: Runtime, T: Manager<R>> crate::BiometryExt<R> for T {
 }
 
 /// Initializes the plugin.
+#[must_use]
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("biometry")
         .invoke_handler(tauri::generate_handler![

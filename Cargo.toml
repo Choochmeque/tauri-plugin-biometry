@@ -34,11 +34,16 @@ block2 = "0.6"
 windows = { version = "0.61", features = [
     "Foundation",
     "Storage_Streams",
+    "Security_Credentials",
     "Security_Credentials_UI",
-    "Security_Cryptography_Core",
     "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
+    "Win32_Networking_WindowsWebServices",
 ] }
+windows-core = "0.61"
+windows-future = "0.2"
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
 
 [build-dependencies]
 tauri-plugin = { version = "2.4.0", features = ["build"] }
