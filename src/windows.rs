@@ -22,7 +22,8 @@ use windows::{
     Win32::Foundation::HWND,
     Win32::Networking::WindowsWebServices::{
         WebAuthNAuthenticatorGetAssertion, WebAuthNAuthenticatorMakeCredential,
-        WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation, WEBAUTHN_ASSERTION,
+        WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation, WebAuthNGetApiVersionNumber,
+        WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable, WEBAUTHN_ASSERTION,
         WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
         WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6,
@@ -587,6 +588,37 @@ impl<R: Runtime> Biometry<R> {
     // / PasswordVault). Signatures match the cross-platform shape.
     #[allow(clippy::unused_self)]
     pub fn status(&self) -> crate::Result<Status> {
+        // Storage uses WebAuthn v8 MakeCredential with `pPRFGlobalEval` and
+        // v6 GetAssertion with `pHmacSecretSaltValues`. Hello can be enrolled
+        // (UserConsentVerifier says "available") but the platform
+        // authenticator's WebAuthn API may be too old for PRF — set_data /
+        // get_data would still fail. Probe the actual surface we use before
+        // falling through to the user-visible biometry reasoning.
+        let api_version = unsafe { WebAuthNGetApiVersionNumber() };
+        if api_version < 8 {
+            return Ok(Status {
+                is_available: false,
+                biometry_type: BiometryType::None,
+                error: Some(format!(
+                    "WebAuthn API version {api_version} too old (need >= 8 for hmac-secret PRF storage)"
+                )),
+                error_code: Some("biometryNotAvailable".to_string()),
+            });
+        }
+        let platform_auth = unsafe { WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable() }
+            .map(|b| b.as_bool())
+            .unwrap_or(false);
+        if !platform_auth {
+            return Ok(Status {
+                is_available: false,
+                biometry_type: BiometryType::None,
+                error: Some(
+                    "WebAuthn user-verifying platform authenticator unavailable".to_string(),
+                ),
+                error_code: Some("biometryNotAvailable".to_string()),
+            });
+        }
+
         let availability = UserConsentVerifier::CheckAvailabilityAsync()
             .and_then(|async_op| async_op.get())
             .map_err(|e| {
