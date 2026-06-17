@@ -11,11 +11,10 @@ use rand::RngCore;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
+use windows_future::IAsyncOperation;
+
 use windows::{
-    core::{
-        factory, Error as WinError, IInspectable, Interface, BOOL, GUID, HRESULT, HSTRING, PCWSTR,
-    },
-    Foundation::IAsyncOperation,
+    core::{factory, Error as WinError, Interface, BOOL, GUID, HRESULT, HSTRING, PCWSTR},
     Security::Credentials::UI::{
         UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
     },
@@ -290,7 +289,7 @@ impl Drop for AssertionGuard {
 // dialog is owned by our window instead of appearing behind it (which is
 // what makes the WinRT-only `RequestVerificationAsync` look like a hang).
 #[windows::core::interface("39E050C3-4E74-441A-8DC0-B81104DF949C")]
-unsafe trait IUserConsentVerifierInterop: IInspectable {
+unsafe trait IUserConsentVerifierInterop: windows_core::IInspectable {
     unsafe fn RequestVerificationForWindowAsync(
         &self,
         app_window: HWND,
