@@ -131,6 +131,10 @@ fn rp_id_for(app_identifier: &str, domain: &str) -> String {
     format!("{PLUGIN_RP_PREFIX}.{app_identifier}.{domain}")
 }
 
+fn u32_len(n: usize) -> Result<u32, WinError> {
+    u32::try_from(n).map_err(|_| WinError::from(HRESULT(-1)))
+}
+
 // -------------------- blob format --------------------
 
 mod b64_field {
@@ -216,7 +220,7 @@ fn make_webauthn_credential(
     let user_display_w = WideStr::new(user_label);
     let user = WEBAUTHN_USER_ENTITY_INFORMATION {
         dwVersion: WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
-        cbId: user_id.len() as u32,
+        cbId: 16,
         pbId: user_id.as_mut_ptr(),
         pwszName: user_name_w.pcwstr(),
         pwszIcon: PCWSTR::null(),
@@ -226,14 +230,13 @@ fn make_webauthn_credential(
     let challenge: [u8; 32] = rand::random();
     let challenge_b64 = B64.encode(challenge);
     let client_data_json = format!(
-        "{{\"type\":\"webauthn.create\",\"challenge\":\"{}\",\"origin\":\"{}\"}}",
-        challenge_b64, rp_id_str
+        "{{\"type\":\"webauthn.create\",\"challenge\":\"{challenge_b64}\",\"origin\":\"{rp_id_str}\"}}"
     );
     let mut client_data_bytes = client_data_json.into_bytes();
     let hash_alg_w = WideStr::new("SHA-256");
     let client_data = WEBAUTHN_CLIENT_DATA {
         dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
-        cbClientDataJSON: client_data_bytes.len() as u32,
+        cbClientDataJSON: u32_len(client_data_bytes.len())?,
         pbClientDataJSON: client_data_bytes.as_mut_ptr(),
         pwszHashAlgId: hash_alg_w.pcwstr(),
     };
@@ -252,7 +255,7 @@ fn make_webauthn_credential(
         },
     ];
     let cred_params = WEBAUTHN_COSE_CREDENTIAL_PARAMETERS {
-        cCredentialParameters: params.len() as u32,
+        cCredentialParameters: 2,
         pCredentialParameters: params.as_mut_ptr(),
     };
 
@@ -260,11 +263,11 @@ fn make_webauthn_credential(
     let mut hmac_enable: BOOL = BOOL(1);
     let mut ext_list = [WEBAUTHN_EXTENSION {
         pwszExtensionIdentifier: hmac_secret_id_w.pcwstr(),
-        cbExtension: std::mem::size_of::<BOOL>() as u32,
-        pvExtension: &mut hmac_enable as *mut _ as *mut c_void,
+        cbExtension: u32_len(std::mem::size_of::<BOOL>())?,
+        pvExtension: std::ptr::addr_of_mut!(hmac_enable).cast::<c_void>(),
     }];
     let extensions = WEBAUTHN_EXTENSIONS {
-        cExtensions: ext_list.len() as u32,
+        cExtensions: 1,
         pExtensions: ext_list.as_mut_ptr(),
     };
 
@@ -321,14 +324,13 @@ fn get_assertion_prf(
     let challenge: [u8; 32] = rand::random();
     let challenge_b64 = B64.encode(challenge);
     let client_data_json = format!(
-        "{{\"type\":\"webauthn.get\",\"challenge\":\"{}\",\"origin\":\"{}\"}}",
-        challenge_b64, rp_id_str
+        "{{\"type\":\"webauthn.get\",\"challenge\":\"{challenge_b64}\",\"origin\":\"{rp_id_str}\"}}"
     );
     let mut client_data_bytes = client_data_json.into_bytes();
     let hash_alg_w = WideStr::new("SHA-256");
     let client_data = WEBAUTHN_CLIENT_DATA {
         dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
-        cbClientDataJSON: client_data_bytes.len() as u32,
+        cbClientDataJSON: u32_len(client_data_bytes.len())?,
         pbClientDataJSON: client_data_bytes.as_mut_ptr(),
         pwszHashAlgId: hash_alg_w.pcwstr(),
     };
@@ -337,7 +339,7 @@ fn get_assertion_prf(
     let mut cred_id_bytes = credential_id.to_vec();
     let mut cred_ex = WEBAUTHN_CREDENTIAL_EX {
         dwVersion: WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION,
-        cbId: cred_id_bytes.len() as u32,
+        cbId: u32_len(cred_id_bytes.len())?,
         pbId: cred_id_bytes.as_mut_ptr(),
         pwszCredentialType: public_key_type_w.pcwstr(),
         dwTransports: 0,
@@ -350,7 +352,7 @@ fn get_assertion_prf(
 
     let mut salt_bytes = salt.to_vec();
     let mut global_salt = WEBAUTHN_HMAC_SECRET_SALT {
-        cbFirst: salt_bytes.len() as u32,
+        cbFirst: 32,
         pbFirst: salt_bytes.as_mut_ptr(),
         cbSecond: 0,
         pbSecond: ptr::null_mut(),
@@ -413,9 +415,8 @@ fn find_existing_credential_id_for_domain(domain: &str) -> Option<Vec<u8>> {
         if entry.RetrievePassword().is_err() {
             continue;
         }
-        let password = match entry.Password() {
-            Ok(p) => p,
-            Err(_) => continue,
+        let Ok(password) = entry.Password() else {
+            continue;
         };
         if let Ok(blob) = decode_blob(&password.to_string()) {
             return Some(blob.cred);
@@ -429,15 +430,14 @@ fn find_existing_credential_id_for_domain(domain: &str) -> Option<Vec<u8>> {
 pub struct Biometry<R: Runtime>(AppHandle<R>);
 
 impl<R: Runtime> Biometry<R> {
+    // Methods that don't touch self use global Windows APIs (UserConsentVerifier
+    // / PasswordVault). Signatures match the cross-platform shape.
+    #[allow(clippy::unused_self)]
     pub fn status(&self) -> crate::Result<Status> {
         let availability = UserConsentVerifier::CheckAvailabilityAsync()
             .and_then(|async_op| async_op.get())
             .map_err(|e| {
-                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("internalError".to_string()),
-                    message: Some(format!("Failed to check biometry availability: {:?}", e)),
-                    data: (),
-                }))
+                reject_fmt("internalError", "Failed to check biometry availability", &e)
             })?;
 
         let (is_available, biometry_type, error, error_code) = match availability {
@@ -482,76 +482,48 @@ impl<R: Runtime> Biometry<R> {
         })
     }
 
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
     pub fn authenticate(&self, reason: String, _options: AuthOptions) -> crate::Result<()> {
         let result = UserConsentVerifier::RequestVerificationAsync(&HSTRING::from(reason))
             .and_then(|async_op| {
                 nudge_hello_dialog_focus_async(5, 250);
                 async_op.get()
             })
-            .map_err(|e| {
-                crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("internalError".to_string()),
-                    message: Some(format!("Failed to request user verification: {:?}", e)),
-                    data: (),
-                }))
-            })?;
+            .map_err(|e| reject_fmt("internalError", "Failed to request user verification", &e))?;
 
         match result {
             UserConsentVerificationResult::Verified => Ok(()),
-            UserConsentVerificationResult::DeviceBusy => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("systemCancel".to_string()),
-                    message: Some("Device is busy".to_string()),
-                    data: (),
-                }),
+            UserConsentVerificationResult::DeviceBusy => {
+                Err(reject("systemCancel", "Device is busy"))
+            }
+            UserConsentVerificationResult::DeviceNotPresent => {
+                Err(reject("biometryNotAvailable", "No biometric device found"))
+            }
+            UserConsentVerificationResult::DisabledByPolicy => Err(reject(
+                "biometryNotAvailable",
+                "Biometric authentication is disabled by policy",
             )),
-            UserConsentVerificationResult::DeviceNotPresent => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("biometryNotAvailable".to_string()),
-                    message: Some("No biometric device found".to_string()),
-                    data: (),
-                }),
+            UserConsentVerificationResult::NotConfiguredForUser => Err(reject(
+                "biometryNotEnrolled",
+                "Biometric authentication is not configured for the user",
             )),
-            UserConsentVerificationResult::DisabledByPolicy => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("biometryNotAvailable".to_string()),
-                    message: Some("Biometric authentication is disabled by policy".to_string()),
-                    data: (),
-                }),
+            UserConsentVerificationResult::Canceled => Err(reject(
+                "userCancel",
+                "Authentication was canceled by the user",
             )),
-            UserConsentVerificationResult::NotConfiguredForUser => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("biometryNotEnrolled".to_string()),
-                    message: Some(
-                        "Biometric authentication is not configured for the user".to_string(),
-                    ),
-                    data: (),
-                }),
+            UserConsentVerificationResult::RetriesExhausted => Err(reject(
+                "biometryLockout",
+                "Too many failed authentication attempts",
             )),
-            UserConsentVerificationResult::Canceled => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("userCancel".to_string()),
-                    message: Some("Authentication was canceled by the user".to_string()),
-                    data: (),
-                }),
-            )),
-            UserConsentVerificationResult::RetriesExhausted => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("biometryLockout".to_string()),
-                    message: Some("Too many failed authentication attempts".to_string()),
-                    data: (),
-                }),
-            )),
-            _ => Err(crate::Error::PluginInvoke(
-                PluginInvokeError::InvokeRejected(ErrorResponse {
-                    code: Some("authenticationFailed".to_string()),
-                    message: Some("Authentication failed".to_string()),
-                    data: (),
-                }),
-            )),
+            _ => Err(reject("authenticationFailed", "Authentication failed")),
         }
     }
 
+    #[allow(
+        clippy::unused_self,
+        clippy::needless_pass_by_value,
+        clippy::unnecessary_wraps
+    )]
     pub fn has_data(&self, options: DataOptions) -> crate::Result<bool> {
         let domain = options.domain;
         let name = options.name;
@@ -563,22 +535,22 @@ impl<R: Runtime> Biometry<R> {
             return Ok(false);
         }
 
-        let vault = match PasswordVault::new() {
-            Ok(v) => v,
-            Err(_) => return Ok(false),
+        let Ok(vault) = PasswordVault::new() else {
+            return Ok(false);
         };
         let resource = HSTRING::from(&domain);
         let username = HSTRING::from(&name);
         Ok(vault.Retrieve(&resource, &username).is_ok())
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn get_data(
         &self,
         window: WebviewWindow<R>,
         options: GetDataOptions,
     ) -> crate::Result<DataResponse> {
-        let domain = options.domain.clone();
-        let name = options.name.clone();
+        let domain = options.domain;
+        let name = options.name;
 
         if domain.is_empty() || name.is_empty() {
             return Err(reject("invalidInput", "Domain and name must not be empty"));
@@ -642,6 +614,7 @@ impl<R: Runtime> Biometry<R> {
         })
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn set_data(&self, window: WebviewWindow<R>, options: SetDataOptions) -> crate::Result<()> {
         let domain = options.domain;
         let name = options.name;
@@ -716,6 +689,7 @@ impl<R: Runtime> Biometry<R> {
         Ok(())
     }
 
+    #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
     pub fn remove_data(&self, options: RemoveDataOptions) -> crate::Result<()> {
         let domain = options.domain;
         let name = options.name;
@@ -729,12 +703,12 @@ impl<R: Runtime> Biometry<R> {
         let resource = HSTRING::from(&domain);
         let username = HSTRING::from(&name);
 
-        match vault.Retrieve(&resource, &username) {
-            Ok(cred) => vault
-                .Remove(&cred)
-                .map_err(|e| reject_fmt("internalError", "vault remove", &e)),
-            Err(_) => Ok(()),
-        }
+        let Ok(cred) = vault.Retrieve(&resource, &username) else {
+            return Ok(());
+        };
+        vault
+            .Remove(&cred)
+            .map_err(|e| reject_fmt("internalError", "vault remove", &e))
     }
 }
 
