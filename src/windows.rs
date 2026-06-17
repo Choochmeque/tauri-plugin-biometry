@@ -9,15 +9,15 @@ use aes_gcm::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rand::RngCore;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
+use tauri::{plugin::PluginApi, AppHandle, Manager, Runtime, WebviewWindow};
 
 use windows::{
-    core::{Error as WinError, HRESULT, HSTRING, PCWSTR},
+    core::{Error as WinError, BOOL, HRESULT, HSTRING, PCWSTR},
     Security::Credentials::UI::{
         UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
     },
     Security::Credentials::{PasswordCredential, PasswordVault},
-    Win32::Foundation::{BOOL, HWND},
+    Win32::Foundation::HWND,
     Win32::Networking::WindowsWebServices::{
         WebAuthNAuthenticatorGetAssertion, WebAuthNAuthenticatorMakeCredential,
         WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation,
@@ -35,7 +35,10 @@ use windows::{
 };
 
 use crate::error::{ErrorResponse, PluginInvokeError};
-use crate::models::*;
+use crate::models::{
+    AuthOptions, BiometryType, DataOptions, DataResponse, GetDataOptions, RemoveDataOptions,
+    SetDataOptions, Status,
+};
 
 const PLUGIN_RP_PREFIX: &str = "io.tauri.plugin.biometry";
 const BLOB_VERSION: u8 = 0x01;
@@ -57,15 +60,14 @@ const COSE_ALG_ES256: i32 = -7;
 const COSE_ALG_RS256: i32 = -257;
 const ATTESTATION_NONE: u32 = 0;
 
+// Signature must match the cross-platform plugin contract — return type is
+// fixed even though Windows init can't fail.
+#[allow(clippy::unnecessary_wraps)]
 pub fn init<R: Runtime, C: DeserializeOwned>(
     app: &AppHandle<R>,
     _api: PluginApi<R, C>,
 ) -> crate::Result<Biometry<R>> {
-    let app_identifier = app.config().identifier.clone();
-    Ok(Biometry {
-        app: app.clone(),
-        app_identifier,
-    })
+    Ok(Biometry(app.clone()))
 }
 
 #[inline]
@@ -301,12 +303,12 @@ fn make_webauthn_credential(
     let result = unsafe {
         let att = &*attestation_ptr;
         if att.pbCredentialId.is_null() || att.cbCredentialId == 0 {
-            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
+            WebAuthNFreeCredentialAttestation(attestation_ptr);
             return Err(WinError::from(HRESULT(-1)));
         }
         let slice = std::slice::from_raw_parts(att.pbCredentialId, att.cbCredentialId as usize);
         let v = slice.to_vec();
-        WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
+        WebAuthNFreeCredentialAttestation(attestation_ptr);
         v
     };
 
@@ -386,18 +388,18 @@ fn get_assertion_prf(
     let prf_out = unsafe {
         let assertion = &*assertion_ptr;
         if assertion.pHmacSecret.is_null() {
-            WebAuthNFreeAssertion(Some(assertion_ptr));
+            WebAuthNFreeAssertion(assertion_ptr);
             return Err(WinError::from(HRESULT(-1)));
         }
         let secret = &*assertion.pHmacSecret;
         if secret.pbFirst.is_null() || secret.cbFirst as usize != PRF_OUT_LEN {
-            WebAuthNFreeAssertion(Some(assertion_ptr));
+            WebAuthNFreeAssertion(assertion_ptr);
             return Err(WinError::from(HRESULT(-1)));
         }
         let slice = std::slice::from_raw_parts(secret.pbFirst, PRF_OUT_LEN);
         let mut out = [0u8; PRF_OUT_LEN];
         out.copy_from_slice(slice);
-        WebAuthNFreeAssertion(Some(assertion_ptr));
+        WebAuthNFreeAssertion(assertion_ptr);
         out
     };
 
@@ -429,10 +431,7 @@ fn find_existing_credential_id_for_domain(domain: &str) -> Option<Vec<u8>> {
 
 // -------------------- Biometry struct --------------------
 
-pub struct Biometry<R: Runtime> {
-    _app: AppHandle<R>,
-    app_identifier: String,
-}
+pub struct Biometry<R: Runtime>(AppHandle<R>);
 
 impl<R: Runtime> Biometry<R> {
     pub fn status(&self) -> crate::Result<Status> {
@@ -619,7 +618,7 @@ impl<R: Runtime> Biometry<R> {
             .try_into()
             .map_err(|_| reject("internalError", "salt length mismatch"))?;
 
-        let rp_id_str = rp_id_for(&self.app_identifier, &domain);
+        let rp_id_str = rp_id_for(&self.0.config().identifier, &domain);
 
         let prf_out = get_assertion_prf(hwnd, &rp_id_str, &blob.cred, salt_arr)
             .map_err(|e| reject_fmt("authenticationFailed", "webauthn assertion", &e))?;
@@ -662,7 +661,7 @@ impl<R: Runtime> Biometry<R> {
             .hwnd()
             .map_err(|e| reject_fmt("internalError", "resolve window hwnd", &e))?;
 
-        let rp_id_str = rp_id_for(&self.app_identifier, &domain);
+        let rp_id_str = rp_id_for(&self.0.config().identifier, &domain);
 
         let credential_id = match find_existing_credential_id_for_domain(&domain) {
             Some(id) => id,
