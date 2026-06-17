@@ -130,6 +130,8 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         private const val AES_KEY_SIZE = 256
         private const val GCM_IV_LENGTH = 12
         private const val GCM_TAG_LENGTH = 128
+        private const val RECORD_AAD_VERSION = "v1"
+        private const val RECORD_AAD_ALG = "AES-256-GCM+RSA-OAEP-SHA256"
 
         // Maps biometry error numbers to string error codes
         private var biometryErrorCodeMap: MutableMap<Int, String> = HashMap()
@@ -419,10 +421,13 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                 val iv = ByteArray(GCM_IV_LENGTH)
                 SecureRandom().nextBytes(iv)
                 
-                // Encrypt data with AES-GCM
+                // Encrypt data with AES-GCM. AAD binds the ciphertext to its
+                // logical record (version, algorithm, domain, name) so a blob
+                // can't be replayed under a different identity.
                 val aesCipher = Cipher.getInstance(AES_CIPHER_CONFIG)
                 val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
                 aesCipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
+                aesCipher.updateAAD(recordAad(args.domain, args.name))
                 val encryptedData = aesCipher.doFinal(args.data.toByteArray())
                 
                 // Encrypt AES key with RSA-OAEP (SHA-256 for both OAEP digest
@@ -501,12 +506,14 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                                 )
                                 val secretKey = SecretKeySpec(aesKeyBytes, "AES")
                                 
-                                // Decrypt data with AES-GCM
+                                // Decrypt data with AES-GCM; AAD must match the
+                                // identity bound at encrypt time or the tag fails.
                                 val iv = Base64.decode(ivString, Base64.DEFAULT)
                                 val aesCipher = Cipher.getInstance(AES_CIPHER_CONFIG)
                                 val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
                                 aesCipher.init(Cipher.DECRYPT_MODE, secretKey, gcmSpec)
-                                
+                                aesCipher.updateAAD(recordAad(args.domain, args.name))
+
                                 val decryptedBytes = aesCipher.doFinal(
                                     Base64.decode(encryptedData, Base64.DEFAULT)
                                 )
@@ -590,5 +597,14 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
             MGF1ParameterSpec.SHA256,
             PSource.PSpecified.DEFAULT
         )
+    }
+
+    // Length-prefixed AAD covering version, algorithm id, domain, and name.
+    // Bump RECORD_AAD_VERSION on any change to the wrapping/AEAD construction
+    // so old ciphertext fails closed instead of being misinterpreted.
+    private fun recordAad(domain: String, name: String): ByteArray {
+        val payload = "$RECORD_AAD_VERSION|$RECORD_AAD_ALG|" +
+            "${domain.length}:$domain|${name.length}:$name"
+        return payload.toByteArray(Charsets.UTF_8)
     }
 }
