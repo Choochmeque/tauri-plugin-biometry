@@ -22,9 +22,9 @@ use windows::{
     Win32::Foundation::HWND,
     Win32::Networking::WindowsWebServices::{
         WebAuthNAuthenticatorGetAssertion, WebAuthNAuthenticatorMakeCredential,
-        WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation, WebAuthNGetApiVersionNumber,
-        WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable, WEBAUTHN_ASSERTION,
-        WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
+        WebAuthNDeletePlatformCredential, WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation,
+        WebAuthNGetApiVersionNumber, WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable,
+        WEBAUTHN_ASSERTION, WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
         WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6,
         WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS, WEBAUTHN_CLIENT_DATA,
@@ -930,9 +930,39 @@ impl<R: Runtime> Biometry<R> {
         let Ok(cred) = vault.Retrieve(&resource, &username) else {
             return Ok(());
         };
+
+        // Pull the credentialId out of the blob before deleting the vault
+        // entry. Used below to clean up the underlying WebAuthn platform
+        // credential if this was the last entry for the domain. Best-effort
+        // — if the blob is corrupt or from an older format, we still remove
+        // the vault entry, just skip the credential cleanup.
+        let credential_id: Option<Vec<u8>> = (|| {
+            cred.RetrievePassword().ok()?;
+            let password = cred.Password().ok()?;
+            decode_blob(&password.to_string()).ok().map(|b| b.cred)
+        })();
+
         vault
             .Remove(&cred)
-            .map_err(|e| reject_fmt("internalError", "vault remove", &e))
+            .map_err(|e| reject_fmt("internalError", "vault remove", &e))?;
+
+        // If no other (domain, name) entries reference this credential,
+        // remove the platform credential too so it doesn't linger in
+        // Hello's passkey list as orphan clutter. Conservative on errors:
+        // if we can't count remaining entries, skip the cleanup.
+        if let Some(cred_id) = credential_id {
+            let remaining = vault
+                .FindAllByResource(&resource)
+                .and_then(|v| v.Size())
+                .unwrap_or(1);
+            if remaining == 0 {
+                // Best-effort: a failed delete just leaves the credential
+                // alone — the user can clean it from Windows Settings.
+                let _ = unsafe { WebAuthNDeletePlatformCredential(&cred_id) };
+            }
+        }
+
+        Ok(())
     }
 }
 
