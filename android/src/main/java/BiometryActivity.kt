@@ -35,7 +35,9 @@ class BiometryActivity : AppCompatActivity() {
         var title = intent.getStringExtra(BiometryPlugin.TITLE)
         val subtitle = intent.getStringExtra(BiometryPlugin.SUBTITLE)
         val description = intent.getStringExtra(BiometryPlugin.REASON)
-        allowDeviceCredential = false
+        // Local per-instance flag — was previously a companion var, which
+        // would have allowed concurrent prompts to trample each other.
+        var allowDeviceCredential = false
         // Android docs say we should check if the device is secure before enabling device credential fallback
         val manager = getSystemService(
             Context.KEYGUARD_SERVICE
@@ -108,7 +110,9 @@ class BiometryActivity : AppCompatActivity() {
         errorMessage: String? = ""
     ) {
         val intent = Intent()
-        val prefix = BiometryPlugin.RESULT_EXTRA_PREFIX
+        // Derive the prefix locally from this activity's packageName rather
+        // than reading a shared companion var.
+        val prefix = "$packageName."
         intent
             .putExtra(prefix + BiometryPlugin.RESULT_TYPE, resultType.toString())
             .putExtra(prefix + BiometryPlugin.RESULT_ERROR_CODE, errorCode)
@@ -118,9 +122,5 @@ class BiometryActivity : AppCompatActivity() {
             )
         setResult(Activity.RESULT_OK, intent)
         finish()
-    }
-
-    companion object {
-        var allowDeviceCredential = false
     }
 }

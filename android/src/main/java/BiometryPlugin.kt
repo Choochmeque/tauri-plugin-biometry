@@ -114,7 +114,6 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     private val coroutineScope = CoroutineScope(Dispatchers.IO)
 
     companion object {
-        var RESULT_EXTRA_PREFIX = ""
         const val TITLE = "title"
         const val SUBTITLE = "subtitle"
         const val REASON = "reason"
@@ -240,8 +239,6 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
      */
     @Command
     fun authenticate(invoke: Invoke) {
-        // The result of an intent is supposed to have the package name as a prefix
-        RESULT_EXTRA_PREFIX = activity.packageName + "."
         val intent = Intent(
             activity,
             BiometryActivity::class.java
@@ -282,10 +279,14 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
             return
         }
 
+        // Derive the prefix locally per call instead of relying on shared
+        // mutable state.
+        val prefix = "${activity.packageName}."
+
         // Convert the string result type to an enum
         val data = result.data
         val resultTypeName = data?.getStringExtra(
-            RESULT_EXTRA_PREFIX + RESULT_TYPE
+            prefix + RESULT_TYPE
         )
         if (resultTypeName == null) {
             invoke.reject(
@@ -304,11 +305,11 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
             return
         }
         val errorCode = data.getIntExtra(
-            RESULT_EXTRA_PREFIX + RESULT_ERROR_CODE,
+            prefix + RESULT_ERROR_CODE,
             0
         )
         var errorMessage = data.getStringExtra(
-            RESULT_EXTRA_PREFIX + RESULT_ERROR_MESSAGE
+            prefix + RESULT_ERROR_MESSAGE
         )
         when (resultType) {
             BiometryResultType.SUCCESS -> invoke.resolve()
@@ -344,10 +345,19 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
             .setKeySize(4096)
             .setBlockModes(KeyProperties.BLOCK_MODE_ECB)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)
-            .setDigests(KeyProperties.DIGEST_SHA256)
+            // SHA-256 = OAEP digest. SHA-1 is needed because AndroidKeyStore's
+            // MGF1 is wired to SHA-1 internally (see oaepSpec()).
+            .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA1)
             .setUserAuthenticationRequired(true)
             .setInvalidatedByBiometricEnrollment(true)
-        
+
+        // API 34+ requires MGF1 digests to be authorized separately from the
+        // OAEP digest — setDigests() no longer covers MGF1. Without this the
+        // keystore rejects the operation with INCOMPATIBLE_MGF_DIGEST.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            builder.setMgf1Digests(KeyProperties.DIGEST_SHA1)
+        }
+
         keyPairGenerator.initialize(builder.build())
         
         return keyPairGenerator.generateKeyPair()
@@ -666,10 +676,16 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     }
 
     private fun oaepSpec(): OAEPParameterSpec {
+        // AndroidKeyStore's RSA/OAEP implementation uses SHA-1 for MGF1
+        // internally regardless of the transformation name, and on emulators
+        // it silently ignores an MGF1=SHA-256 OAEPParameterSpec — yielding
+        // "Keystore operation failed". Pin MGF1 to SHA-1 so encrypt/decrypt
+        // agree on what the keystore actually does. The OAEP digest stays
+        // SHA-256, which is the part that matters for security.
         return OAEPParameterSpec(
             "SHA-256",
             "MGF1",
-            MGF1ParameterSpec.SHA256,
+            MGF1ParameterSpec.SHA1,
             PSource.PSpecified.DEFAULT
         )
     }
