@@ -26,8 +26,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::ipc::CommandScope;
 
-use crate::error::{ErrorResponse, PluginInvokeError};
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     /// Domain this entry matches.
@@ -61,9 +59,11 @@ pub fn check(scope: &CommandScope<Entry>, domain: &str, name: &str) -> crate::Re
 }
 
 fn reject(domain: &str, name: &str, why: &str) -> crate::Error {
-    crate::Error::PluginInvoke(PluginInvokeError::InvokeRejected(ErrorResponse {
-        code: Some("scopeDenied".to_string()),
-        message: Some(format!("biometry: ({domain}, {name}) {why}")),
-        data: (),
-    }))
+    // Cross-platform path: scope.rs is shared with mobile, where
+    // `crate::error::PluginInvokeError` doesn't exist. The unified
+    // `crate::Error::Io` variant works everywhere, and the `scopeDenied:`
+    // prefix preserves the distinguishable error code in the message.
+    crate::Error::Io(std::io::Error::other(format!(
+        "scopeDenied: biometry ({domain}, {name}) {why}"
+    )))
 }
