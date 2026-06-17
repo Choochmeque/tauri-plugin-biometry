@@ -41,6 +41,7 @@ import javax.crypto.spec.SecretKeySpec
 import javax.crypto.spec.OAEPParameterSpec
 import javax.crypto.spec.PSource
 import java.security.spec.MGF1ParameterSpec
+import java.security.MessageDigest
 import java.security.SecureRandom
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -132,6 +133,10 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         private const val GCM_TAG_LENGTH = 128
         private const val RECORD_AAD_VERSION = "v1"
         private const val RECORD_AAD_ALG = "AES-256-GCM+RSA-OAEP-SHA256"
+        private const val MAX_DOMAIN_LEN = 64
+        private const val MAX_NAME_LEN = 256
+        private const val KEYSTORE_ALIAS_PREFIX = "biometry_"
+        private val DOMAIN_PATTERN = Regex("^[A-Za-z0-9._-]+$")
 
         // Maps biometry error numbers to string error codes
         private var biometryErrorCodeMap: MutableMap<Int, String> = HashMap()
@@ -369,6 +374,16 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     fun hasData(invoke: Invoke) {
         val args = invoke.parseArgs(DataOptions::class.java)
 
+        // Match the Windows behavior: invalid input yields `hasData: false`
+        // rather than an error, so callers can probe without surfacing
+        // validation failures as exceptions.
+        if (validateIdentity(args.domain, args.name) != null) {
+            val result = JSObject()
+            result.put("hasData", false)
+            invoke.resolve(result)
+            return
+        }
+
         coroutineScope.launch {
             try {
                 val scope = scopeId(args.domain, args.name)
@@ -390,9 +405,15 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     fun setData(invoke: Invoke) {
         val args = invoke.parseArgs(SetDataOptions::class.java)
 
+        validateIdentity(args.domain, args.name)?.let {
+            invoke.reject(it, "invalidInput")
+            return
+        }
+
         coroutineScope.launch {
             try {
                 val scope = scopeId(args.domain, args.name)
+                val alias = keystoreAlias(args.domain, args.name)
                 val dataKey = stringPreferencesKey(scope)
                 val ivKey = stringPreferencesKey("${scope}_iv")
                 val aesKey = stringPreferencesKey("${scope}_key")
@@ -407,10 +428,10 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                 // Delete the key from keystore
                 val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
                 keyStore.load(null)
-                keyStore.deleteEntry(scope)
+                keyStore.deleteEntry(alias)
 
                 // Generate RSA key pair for encrypting AES key
-                val keyPair = generateKeyPair(scope)
+                val keyPair = generateKeyPair(alias)
                 
                 // Generate AES key for data encryption
                 val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES)
@@ -454,9 +475,15 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     fun getData(invoke: Invoke) {
         val args = invoke.parseArgs(GetDataOptions::class.java)
 
+        validateIdentity(args.domain, args.name)?.let {
+            invoke.reject(it, "invalidInput")
+            return
+        }
+
         try {
             val scope = scopeId(args.domain, args.name)
-            val keyPair = getKeyPair(scope)
+            val alias = keystoreAlias(args.domain, args.name)
+            val keyPair = getKeyPair(alias)
             if (keyPair == null) {
                 invoke.reject("No key pair found")
                 return
@@ -558,9 +585,15 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     fun removeData(invoke: Invoke) {
         val args = invoke.parseArgs(RemoveDataOptions::class.java)
 
+        validateIdentity(args.domain, args.name)?.let {
+            invoke.reject(it, "invalidInput")
+            return
+        }
+
         coroutineScope.launch {
             try {
                 val scope = scopeId(args.domain, args.name)
+                val alias = keystoreAlias(args.domain, args.name)
                 val dataKey = stringPreferencesKey(scope)
                 val ivKey = stringPreferencesKey("${scope}_iv")
                 val aesKey = stringPreferencesKey("${scope}_key")
@@ -574,7 +607,7 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                 // Delete the key from keystore
                 val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
                 keyStore.load(null)
-                keyStore.deleteEntry(scope)
+                keyStore.deleteEntry(alias)
 
                 invoke.resolve()
             } catch (e: Exception) {
@@ -583,11 +616,42 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         }
     }
 
-    // Scope every storage and keystore identifier by both domain and name so
-    // records under the same name in different domains — or different names
-    // in the same domain — never collide or invalidate each other.
+    // Scope every storage identifier by both domain and name so records under
+    // the same name in different domains — or different names in the same
+    // domain — never collide or invalidate each other.
     private fun scopeId(domain: String, name: String): String {
         return "${domain.length}:$domain:$name"
+    }
+
+    // Mirror the Rust/Windows validation: reject empty, cap lengths, and
+    // restrict domain to a documented safe shape. Returns null on success or
+    // a short error message on failure.
+    private fun validateIdentity(domain: String, name: String): String? {
+        if (domain.isEmpty() || name.isEmpty()) {
+            return "domain and name must not be empty"
+        }
+        if (domain.length > MAX_DOMAIN_LEN) {
+            return "domain exceeds maximum length"
+        }
+        if (name.length > MAX_NAME_LEN) {
+            return "name exceeds maximum length"
+        }
+        if (!DOMAIN_PATTERN.matches(domain)) {
+            return "domain must match [A-Za-z0-9._-]"
+        }
+        return null
+    }
+
+    // Keystore aliases vary in length tolerance across OEMs; hash the scoped
+    // identity to a fixed-length, safe-character alias.
+    private fun keystoreAlias(domain: String, name: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(scopeId(domain, name).toByteArray(Charsets.UTF_8))
+        val hex = StringBuilder(digest.size * 2)
+        for (b in digest) {
+            hex.append(String.format("%02x", b))
+        }
+        return "$KEYSTORE_ALIAS_PREFIX$hex"
     }
 
     private fun oaepSpec(): OAEPParameterSpec {
