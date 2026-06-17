@@ -7,7 +7,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use rand::Rng;
+use rand::RngExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
