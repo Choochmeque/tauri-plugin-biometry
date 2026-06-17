@@ -3292,6 +3292,8 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.18",
  "windows",
+ "windows-core 0.61.2",
+ "windows-future",
 ]
 
 [[package]]
