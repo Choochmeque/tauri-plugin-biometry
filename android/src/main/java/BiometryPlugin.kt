@@ -38,6 +38,9 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import javax.crypto.spec.OAEPParameterSpec
+import javax.crypto.spec.PSource
+import java.security.spec.MGF1ParameterSpec
 import java.security.SecureRandom
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -121,7 +124,7 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         const val DEVICE_CREDENTIAL = "allowDeviceCredential"
         const val CONFIRMATION_REQUIRED = "confirmationRequired"
         
-        private const val RSA_CIPHER_CONFIG = "RSA/ECB/PKCS1Padding"
+        private const val RSA_CIPHER_CONFIG = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"
         private const val AES_CIPHER_CONFIG = "AES/GCM/NoPadding"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val AES_KEY_SIZE = 256
@@ -333,7 +336,8 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         )
             .setKeySize(4096)
             .setBlockModes(KeyProperties.BLOCK_MODE_ECB)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)
+            .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(true)
             .setInvalidatedByBiometricEnrollment(true)
         
@@ -421,9 +425,10 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                 aesCipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
                 val encryptedData = aesCipher.doFinal(args.data.toByteArray())
                 
-                // Encrypt AES key with RSA
+                // Encrypt AES key with RSA-OAEP (SHA-256 for both OAEP digest
+                // and MGF1; AndroidKeyStore otherwise defaults MGF1 to SHA-1).
                 val rsaCipher = Cipher.getInstance(RSA_CIPHER_CONFIG)
-                rsaCipher.init(Cipher.ENCRYPT_MODE, keyPair.getPublic())
+                rsaCipher.init(Cipher.ENCRYPT_MODE, keyPair.getPublic(), oaepSpec())
                 val encryptedAesKey = rsaCipher.doFinal(secretKey.encoded)
                 
                 // Store encrypted data, IV, and encrypted AES key
@@ -453,7 +458,7 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
             }
             
             val rsaCipher = Cipher.getInstance(RSA_CIPHER_CONFIG)
-            rsaCipher.init(Cipher.DECRYPT_MODE, keyPair.getPrivate())
+            rsaCipher.init(Cipher.DECRYPT_MODE, keyPair.getPrivate(), oaepSpec())
             
             val promptInfo = BiometricPrompt.PromptInfo.Builder()
                 .setTitle(args.title ?: (biometryNameMap[biometryTypes[0]] ?: ""))
@@ -576,5 +581,14 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     // in the same domain — never collide or invalidate each other.
     private fun scopeId(domain: String, name: String): String {
         return "${domain.length}:$domain:$name"
+    }
+
+    private fun oaepSpec(): OAEPParameterSpec {
+        return OAEPParameterSpec(
+            "SHA-256",
+            "MGF1",
+            MGF1ParameterSpec.SHA256,
+            PSource.PSpecified.DEFAULT
+        )
     }
 }
