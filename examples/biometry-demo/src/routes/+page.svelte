@@ -1,156 +1,303 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import {
+    BiometryType,
+    authenticate,
+    checkStatus,
+    getData,
+    hasData,
+    removeData,
+    setData,
+    type Status,
+  } from "@choochmeque/tauri-plugin-biometry-api";
 
-  let name = $state("");
-  let greetMsg = $state("");
+  const DOMAIN = "com.choochmeque.biometry-demo";
 
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+  let status = $state<Status | null>(null);
+  let log = $state<string[]>([]);
+
+  let authReason = $state("Confirm your identity");
+
+  let setName = $state("api-token");
+  let setValue = $state("secret-token-123");
+
+  let getName = $state("api-token");
+  let getReason = $state("Unlock saved data");
+
+  let probeName = $state("api-token");
+
+  let removeName = $state("api-token");
+
+  function logLine(line: string) {
+    const ts = new Date().toLocaleTimeString();
+    log = [`[${ts}] ${line}`, ...log].slice(0, 100);
+  }
+
+  async function refreshStatus() {
+    try {
+      status = await checkStatus();
+      logLine(
+        `status: available=${status.isAvailable}, type=${BiometryType[status.biometryType]}` +
+          (status.errorCode ? `, code=${status.errorCode}` : ""),
+      );
+    } catch (err) {
+      logLine(`status error: ${err}`);
+    }
+  }
+
+  async function runAuthenticate() {
+    try {
+      await authenticate(authReason, { allowDeviceCredential: true });
+      logLine("authenticate: verified");
+    } catch (err) {
+      logLine(`authenticate error: ${err}`);
+    }
+  }
+
+  async function runSetData() {
+    try {
+      await setData({ domain: DOMAIN, name: setName, data: setValue });
+      logLine(`setData: stored "${setName}"`);
+    } catch (err) {
+      logLine(`setData error: ${err}`);
+    }
+  }
+
+  async function runGetData() {
+    try {
+      const res = await getData({
+        domain: DOMAIN,
+        name: getName,
+        reason: getReason,
+      });
+      logLine(`getData "${res.name}": ${res.data}`);
+    } catch (err) {
+      logLine(`getData error: ${err}`);
+    }
+  }
+
+  async function runHasData() {
+    try {
+      const present = await hasData({ domain: DOMAIN, name: probeName });
+      logLine(`hasData "${probeName}": ${present}`);
+    } catch (err) {
+      logLine(`hasData error: ${err}`);
+    }
+  }
+
+  async function runRemoveData() {
+    try {
+      await removeData({ domain: DOMAIN, name: removeName });
+      logLine(`removeData: removed "${removeName}"`);
+    } catch (err) {
+      logLine(`removeData error: ${err}`);
+    }
   }
 </script>
 
 <main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+  <h1>tauri-plugin-biometry demo</h1>
 
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
-  </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
+  <section>
+    <div class="row">
+      <button onclick={refreshStatus}>Check status</button>
+      {#if status}
+        <span class="pill" class:ok={status.isAvailable}>
+          {status.isAvailable ? "available" : "unavailable"} ·
+          {BiometryType[status.biometryType]}
+        </span>
+      {/if}
+    </div>
+    {#if status?.error}
+      <p class="error">{status.error}</p>
+    {/if}
+  </section>
 
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
+  <section>
+    <h2>authenticate</h2>
+    <div class="row">
+      <input bind:value={authReason} placeholder="reason" />
+      <button onclick={runAuthenticate}>Authenticate</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>setData</h2>
+    <div class="row">
+      <input bind:value={setName} placeholder="name" />
+      <input bind:value={setValue} placeholder="value" />
+      <button onclick={runSetData}>Save</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>getData</h2>
+    <div class="row">
+      <input bind:value={getName} placeholder="name" />
+      <input bind:value={getReason} placeholder="reason" />
+      <button onclick={runGetData}>Get</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>hasData</h2>
+    <div class="row">
+      <input bind:value={probeName} placeholder="name" />
+      <button onclick={runHasData}>Check</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>removeData</h2>
+    <div class="row">
+      <input bind:value={removeName} placeholder="name" />
+      <button onclick={runRemoveData}>Remove</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>log</h2>
+    <pre>{log.join("\n")}</pre>
+  </section>
 </main>
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
   :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+    color: #0f0f0f;
+    background-color: #f6f6f6;
   }
 
-  a:hover {
-    color: #24c8db;
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
   }
 
-  input,
+  h1 {
+    margin: 0;
+    font-size: 1.4rem;
+  }
+
+  h2 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #555;
+  }
+
+  section {
+    background: white;
+    border: 1px solid #e6e6e6;
+    border-radius: 10px;
+    padding: 0.9rem 1rem 1rem;
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  input {
+    flex: 1 1 9rem;
+    min-width: 7rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid #d0d0d0;
+    background: white;
+    font-family: inherit;
+    font-size: 0.9rem;
+  }
+
   button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+    padding: 0.45rem 0.9rem;
+    border-radius: 6px;
+    border: 1px solid #d0d0d0;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.9rem;
   }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
 
+  button:hover {
+    border-color: #888;
+  }
+
+  .pill {
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    background: #eee;
+    color: #444;
+  }
+
+  .pill.ok {
+    background: #d9f7d9;
+    color: #1a6b1a;
+  }
+
+  .error {
+    color: #b00020;
+    margin: 0.5rem 0 0;
+    font-size: 0.85rem;
+  }
+
+  pre {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    background: #111;
+    color: #d9ffd9;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    max-height: 18rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color: #f6f6f6;
+      background-color: #1c1c1c;
+    }
+
+    section {
+      background: #2a2a2a;
+      border-color: #3a3a3a;
+    }
+
+    input,
+    button {
+      background: #1a1a1a;
+      color: #f6f6f6;
+      border-color: #444;
+    }
+
+    button:hover {
+      border-color: #888;
+    }
+
+    .pill {
+      background: #3a3a3a;
+      color: #ddd;
+    }
+
+    .pill.ok {
+      background: #1f4d1f;
+      color: #c8ffc8;
+    }
+
+    h2 {
+      color: #bbb;
+    }
+
+    .error {
+      color: #ff7676;
+    }
+  }
 </style>
