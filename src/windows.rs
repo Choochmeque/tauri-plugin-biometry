@@ -23,7 +23,7 @@ use windows::{
     Win32::Foundation::HWND,
     Win32::Networking::WindowsWebServices::{
         WebAuthNAuthenticatorGetAssertion, WebAuthNAuthenticatorMakeCredential,
-        WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation,
+        WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation, WEBAUTHN_ASSERTION,
         WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
         WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6,
@@ -31,11 +31,11 @@ use windows::{
         WEBAUTHN_CLIENT_DATA_CURRENT_VERSION, WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
         WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
         WEBAUTHN_COSE_CREDENTIAL_PARAMETERS, WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
-        WEBAUTHN_CREDENTIALS, WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION,
-        WEBAUTHN_CREDENTIAL_LIST, WEBAUTHN_EXTENSIONS, WEBAUTHN_HMAC_SECRET_SALT,
-        WEBAUTHN_HMAC_SECRET_SALT_VALUES, WEBAUTHN_RP_ENTITY_INFORMATION,
-        WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION, WEBAUTHN_USER_ENTITY_INFORMATION,
-        WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
+        WEBAUTHN_CREDENTIALS, WEBAUTHN_CREDENTIAL_ATTESTATION, WEBAUTHN_CREDENTIAL_EX,
+        WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_LIST, WEBAUTHN_EXTENSIONS,
+        WEBAUTHN_HMAC_SECRET_SALT, WEBAUTHN_HMAC_SECRET_SALT_VALUES,
+        WEBAUTHN_RP_ENTITY_INFORMATION, WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION,
+        WEBAUTHN_USER_ENTITY_INFORMATION, WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
         WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
     },
 };
@@ -244,6 +244,47 @@ struct CredentialAttestationV7 {
 
 const MAKE_CRED_OPTIONS_VERSION_8: u32 = 8;
 
+// RAII wrappers so early-return paths automatically free the heap-allocated
+// structs webauthn.dll hands back, instead of needing a `Free` call before
+// every `return Err(...)`.
+struct AttestationGuard(*mut WEBAUTHN_CREDENTIAL_ATTESTATION);
+
+impl AttestationGuard {
+    fn as_ptr(&self) -> *mut WEBAUTHN_CREDENTIAL_ATTESTATION {
+        self.0
+    }
+    fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+}
+
+impl Drop for AttestationGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { WebAuthNFreeCredentialAttestation(Some(self.0)) };
+        }
+    }
+}
+
+struct AssertionGuard(*mut WEBAUTHN_ASSERTION);
+
+impl AssertionGuard {
+    fn as_ptr(&self) -> *mut WEBAUTHN_ASSERTION {
+        self.0
+    }
+    fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+}
+
+impl Drop for AssertionGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { WebAuthNFreeAssertion(self.0) };
+        }
+    }
+}
+
 // Hand-declared because `windows` 0.61 doesn't expose this interop interface.
 // Used to invoke `UserConsentVerifier` with an HWND parent so the Hello
 // dialog is owned by our window instead of appearing behind it (which is
@@ -346,7 +387,7 @@ fn make_webauthn_credential_with_prf(
     let options_ptr =
         std::ptr::addr_of!(options).cast::<WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS>();
 
-    let attestation_ptr = unsafe {
+    let attestation = AttestationGuard(unsafe {
         WebAuthNAuthenticatorMakeCredential(
             hwnd,
             &rp,
@@ -355,20 +396,18 @@ fn make_webauthn_credential_with_prf(
             &client_data,
             Some(options_ptr),
         )?
-    };
+    });
 
-    if attestation_ptr.is_null() {
+    if attestation.is_null() {
         return Err(WinError::from(HRESULT(-1)));
     }
 
-    let result = unsafe {
-        let att = &*attestation_ptr.cast::<CredentialAttestationV7>();
+    unsafe {
+        let att = &*attestation.as_ptr().cast::<CredentialAttestationV7>();
         if att.dwVersion < 7 {
-            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
             return Err(WinError::from(HRESULT(-1)));
         }
         if att.pbCredentialId.is_null() || att.cbCredentialId == 0 {
-            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
             return Err(WinError::from(HRESULT(-1)));
         }
         let cred_slice =
@@ -376,22 +415,17 @@ fn make_webauthn_credential_with_prf(
         let credential_id = cred_slice.to_vec();
 
         if att.pHmacSecret.is_null() {
-            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
             return Err(WinError::from(HRESULT(-1)));
         }
         let hmac = &*att.pHmacSecret;
         if hmac.pbFirst.is_null() || hmac.cbFirst as usize != PRF_OUT_LEN {
-            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
             return Err(WinError::from(HRESULT(-1)));
         }
         let mut prf_out = [0u8; PRF_OUT_LEN];
         std::ptr::copy_nonoverlapping(hmac.pbFirst, prf_out.as_mut_ptr(), PRF_OUT_LEN);
 
-        WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
-        (credential_id, prf_out)
-    };
-
-    Ok(result)
+        Ok((credential_id, prf_out))
+    }
 }
 
 fn get_assertion_prf(
@@ -453,33 +487,28 @@ fn get_assertion_prf(
     options.pAllowCredentialList = &mut allow_list;
     options.pHmacSecretSaltValues = &mut salt_values;
 
-    let assertion_ptr = unsafe {
+    let assertion = AssertionGuard(unsafe {
         WebAuthNAuthenticatorGetAssertion(hwnd, rp_id_w.pcwstr(), &client_data, Some(&options))?
-    };
+    });
 
-    if assertion_ptr.is_null() {
+    if assertion.is_null() {
         return Err(WinError::from(HRESULT(-1)));
     }
 
-    let prf_out = unsafe {
-        let assertion = &*assertion_ptr;
-        if assertion.pHmacSecret.is_null() {
-            WebAuthNFreeAssertion(assertion_ptr);
+    unsafe {
+        let inner = &*assertion.as_ptr();
+        if inner.pHmacSecret.is_null() {
             return Err(WinError::from(HRESULT(-1)));
         }
-        let secret = &*assertion.pHmacSecret;
+        let secret = &*inner.pHmacSecret;
         if secret.pbFirst.is_null() || secret.cbFirst as usize != PRF_OUT_LEN {
-            WebAuthNFreeAssertion(assertion_ptr);
             return Err(WinError::from(HRESULT(-1)));
         }
         let slice = std::slice::from_raw_parts(secret.pbFirst, PRF_OUT_LEN);
         let mut out = [0u8; PRF_OUT_LEN];
         out.copy_from_slice(slice);
-        WebAuthNFreeAssertion(assertion_ptr);
-        out
-    };
-
-    Ok(prf_out)
+        Ok(out)
+    }
 }
 
 // -------------------- PasswordVault helpers --------------------
