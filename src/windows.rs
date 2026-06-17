@@ -9,7 +9,7 @@ use aes_gcm::{
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rand::RngCore;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tauri::{plugin::PluginApi, AppHandle, Manager, Runtime, WebviewWindow};
+use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
 use windows::{
     core::{Error as WinError, BOOL, HRESULT, HSTRING, PCWSTR},
@@ -25,12 +25,11 @@ use windows::{
         WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
         WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS, WEBAUTHN_CLIENT_DATA,
         WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
-        WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256,
-        WEBAUTHN_COSE_CREDENTIAL_PARAMETER, WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
-        WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_LIST, WEBAUTHN_EXTENSION, WEBAUTHN_EXTENSIONS,
-        WEBAUTHN_HMAC_SECRET_SALT, WEBAUTHN_HMAC_SECRET_SALT_VALUES,
-        WEBAUTHN_RP_ENTITY_INFORMATION, WEBAUTHN_USER_ENTITY_INFORMATION,
-        WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
+        WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
+        WEBAUTHN_COSE_CREDENTIAL_PARAMETERS, WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_LIST,
+        WEBAUTHN_EXTENSION, WEBAUTHN_EXTENSIONS, WEBAUTHN_HMAC_SECRET_SALT,
+        WEBAUTHN_HMAC_SECRET_SALT_VALUES, WEBAUTHN_RP_ENTITY_INFORMATION,
+        WEBAUTHN_USER_ENTITY_INFORMATION, WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
     },
     Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
@@ -302,12 +301,12 @@ fn make_webauthn_credential(
     let result = unsafe {
         let att = &*attestation_ptr;
         if att.pbCredentialId.is_null() || att.cbCredentialId == 0 {
-            WebAuthNFreeCredentialAttestation(attestation_ptr);
+            WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
             return Err(WinError::from(HRESULT(-1)));
         }
         let slice = std::slice::from_raw_parts(att.pbCredentialId, att.cbCredentialId as usize);
         let v = slice.to_vec();
-        WebAuthNFreeCredentialAttestation(attestation_ptr);
+        WebAuthNFreeCredentialAttestation(Some(attestation_ptr));
         v
     };
 
