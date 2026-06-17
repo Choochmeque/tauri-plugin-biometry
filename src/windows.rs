@@ -7,7 +7,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use rand::RngCore;
+use rand::Rng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
@@ -366,7 +366,7 @@ fn make_webauthn_credential_with_prf(
     };
 
     let mut user_id = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut user_id);
+    rand::rng().fill(&mut user_id);
     let user_name_w = WideStr::new(user_label);
     let user_display_w = WideStr::new(user_label);
     let user = WEBAUTHN_USER_ENTITY_INFORMATION {
@@ -863,9 +863,9 @@ impl<R: Runtime> Biometry<R> {
         let rp_id_str = rp_id_for(&self.0.config().identifier, &domain);
 
         let mut salt = [0u8; PRF_SALT_LEN];
-        rand::thread_rng().fill_bytes(&mut salt);
+        rand::rng().fill(&mut salt);
         let mut iv = [0u8; AES_GCM_NONCE_LEN];
-        rand::thread_rng().fill_bytes(&mut iv);
+        rand::rng().fill(&mut iv);
 
         let (credential_id, prf_out) = match find_existing_credential_id_for_domain(&domain) {
             Some(id) => {
