@@ -362,14 +362,15 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun hasData(invoke: Invoke) {
         val args = invoke.parseArgs(DataOptions::class.java)
-        
+
         coroutineScope.launch {
             try {
-                val key = stringPreferencesKey(args.name)
+                val scope = scopeId(args.domain, args.name)
+                val key = stringPreferencesKey(scope)
                 val hasData = dataStore.data
                     .map { preferences -> preferences.contains(key) }
                     .first()
-                
+
                 val result = JSObject()
                 result.put("hasData", hasData)
                 invoke.resolve(result)
@@ -382,27 +383,28 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun setData(invoke: Invoke) {
         val args = invoke.parseArgs(SetDataOptions::class.java)
-        
+
         coroutineScope.launch {
             try {
-                val dataKey = stringPreferencesKey(args.name)
-                val ivKey = stringPreferencesKey("${args.name}_iv")
-                val aesKey = stringPreferencesKey("${args.name}_key")
-                
+                val scope = scopeId(args.domain, args.name)
+                val dataKey = stringPreferencesKey(scope)
+                val ivKey = stringPreferencesKey("${scope}_iv")
+                val aesKey = stringPreferencesKey("${scope}_key")
+
                 // Clear existing data
                 dataStore.edit { preferences ->
                     preferences.remove(dataKey)
                     preferences.remove(ivKey)
                     preferences.remove(aesKey)
                 }
-                
+
                 // Delete the key from keystore
                 val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
                 keyStore.load(null)
-                keyStore.deleteEntry(args.domain)
+                keyStore.deleteEntry(scope)
 
                 // Generate RSA key pair for encrypting AES key
-                val keyPair = generateKeyPair(args.domain)
+                val keyPair = generateKeyPair(scope)
                 
                 // Generate AES key for data encryption
                 val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES)
@@ -441,9 +443,10 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun getData(invoke: Invoke) {
         val args = invoke.parseArgs(GetDataOptions::class.java)
-        
+
         try {
-            val keyPair = getKeyPair(args.domain)
+            val scope = scopeId(args.domain, args.name)
+            val keyPair = getKeyPair(scope)
             if (keyPair == null) {
                 invoke.reject("No key pair found")
                 return
@@ -475,9 +478,9 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                                 val rsaCipher = result.cryptoObject?.cipher
                                     ?: throw Exception("Cipher is null")
                                 
-                                val dataKey = stringPreferencesKey(args.name)
-                                val ivKey = stringPreferencesKey("${args.name}_iv")
-                                val aesKeyKey = stringPreferencesKey("${args.name}_key")
+                                val dataKey = stringPreferencesKey(scope)
+                                val ivKey = stringPreferencesKey("${scope}_iv")
+                                val aesKeyKey = stringPreferencesKey("${scope}_key")
                                 
                                 val preferences = dataStore.data.first()
                                 val encryptedData = preferences[dataKey]
@@ -542,28 +545,36 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun removeData(invoke: Invoke) {
         val args = invoke.parseArgs(RemoveDataOptions::class.java)
-        
+
         coroutineScope.launch {
             try {
-                val dataKey = stringPreferencesKey(args.name)
-                val ivKey = stringPreferencesKey("${args.name}_iv")
-                val aesKey = stringPreferencesKey("${args.name}_key")
-                
+                val scope = scopeId(args.domain, args.name)
+                val dataKey = stringPreferencesKey(scope)
+                val ivKey = stringPreferencesKey("${scope}_iv")
+                val aesKey = stringPreferencesKey("${scope}_key")
+
                 dataStore.edit { preferences ->
                     preferences.remove(dataKey)
                     preferences.remove(ivKey)
                     preferences.remove(aesKey)
                 }
-                
+
                 // Delete the key from keystore
                 val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
                 keyStore.load(null)
-                keyStore.deleteEntry(args.domain)
-                
+                keyStore.deleteEntry(scope)
+
                 invoke.resolve()
             } catch (e: Exception) {
                 invoke.reject("Failed to remove data: ${e.message}")
             }
         }
+    }
+
+    // Scope every storage and keystore identifier by both domain and name so
+    // records under the same name in different domains — or different names
+    // in the same domain — never collide or invalidate each other.
+    private fun scopeId(domain: String, name: String): String {
+        return "${domain.length}:$domain:$name"
     }
 }
