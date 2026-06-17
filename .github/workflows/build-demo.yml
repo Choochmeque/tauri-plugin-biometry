@@ -35,7 +35,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "pnpm"
 
       - name: Build plugin JS bundle
@@ -45,7 +45,7 @@ jobs:
 
       - name: Install demo deps
         working-directory: examples/biometry-demo
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       # `--no-bundle` skips creating .deb/.dmg/.msi installers — we only
       # care that the app compiles & links on each OS, not that bundlers
