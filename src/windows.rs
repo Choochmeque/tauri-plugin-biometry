@@ -861,6 +861,10 @@ impl<R: Runtime> Biometry<R> {
         if domain.is_empty() || name.is_empty() {
             return Err(reject("invalidInput", "Domain and name must not be empty"));
         }
+        // Same validation as set_data / get_data so a caller with remove_data
+        // permission can't delete vault entries outside the plugin's intended
+        // domain shape.
+        validate_domain(&domain).map_err(|m| reject("invalidInput", m))?;
 
         let vault =
             PasswordVault::new().map_err(|e| reject_fmt("internalError", "vault open", &e))?;
