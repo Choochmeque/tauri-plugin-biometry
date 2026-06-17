@@ -4,7 +4,10 @@ use tauri::{
     AppHandle, Runtime, WebviewWindow,
 };
 
-use crate::models::*;
+use crate::models::{
+    AuthOptions, AuthenticatePayload, DataOptions, DataResponse, GetDataOptions, HasDataResponse,
+    RemoveDataOptions, SetDataOptions, Status,
+};
 
 #[cfg(target_os = "android")]
 const PLUGIN_IDENTIFIER: &str = "app.tauri.biometry";
@@ -13,6 +16,8 @@ const PLUGIN_IDENTIFIER: &str = "app.tauri.biometry";
 tauri::ios_plugin_binding!(init_plugin_biometry);
 
 // initializes the Kotlin or Swift plugin classes
+// `api` is passed by value to match the Tauri plugin setup contract.
+#[allow(clippy::needless_pass_by_value)]
 pub fn init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,
     api: PluginApi<R, C>,
@@ -41,7 +46,7 @@ impl<R: Runtime> Biometry<R> {
     pub fn has_data(&self, options: DataOptions) -> crate::Result<bool> {
         self.0
             .run_mobile_plugin("hasData", options)
-            .and_then(|result: HasDataResponse| Ok(result.has_data))
+            .map(|result: HasDataResponse| result.has_data)
             .map_err(Into::into)
     }
 
