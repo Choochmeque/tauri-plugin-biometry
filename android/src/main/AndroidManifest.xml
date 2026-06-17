@@ -6,6 +6,7 @@
     <activity
       android:name=".BiometryActivity"
       android:label="BiometryActivity"
+      android:exported="false"
       android:theme="@style/AppTheme.Transparent"/>
   </application>
 </manifest>
