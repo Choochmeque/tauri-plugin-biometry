@@ -69,15 +69,55 @@ The plugin automatically handles the necessary permissions for Android.
 
 ### Permissions
 
-Configure the plugin permissions in your `capabilities/default.json`:
+The plugin uses Tauri's permission system with a two-tier model:
+
+- `biometry:default` grants only the non-storage commands (`status` and `authenticate`).
+- The storage commands (`has_data`, `get_data`, `set_data`, `remove_data`) must be granted explicitly per capability **and** scoped to the `(domain, name)` pairs the calling webview is allowed to touch. An empty scope rejects every call by design.
+
+Minimal capability that only needs `status` / `authenticate`:
 
 ```json
 {
-  "permissions": {
-    ["biometry:default"]
-  }
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": ["core:default", "biometry:default"]
 }
 ```
+
+Capability that also reads/writes a single domain:
+
+```json
+{
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "biometry:default",
+    {
+      "identifier": "biometry:allow-has-data",
+      "allow": [{ "domain": "com.myapp.creds" }]
+    },
+    {
+      "identifier": "biometry:allow-get-data",
+      "allow": [{ "domain": "com.myapp.creds" }]
+    },
+    {
+      "identifier": "biometry:allow-set-data",
+      "allow": [{ "domain": "com.myapp.creds" }]
+    },
+    {
+      "identifier": "biometry:allow-remove-data",
+      "allow": [{ "domain": "com.myapp.creds" }]
+    }
+  ]
+}
+```
+
+Scope entry shape:
+
+- `{ "domain": "com.example" }` — matches every `name` in that domain.
+- `{ "domain": "com.example", "name": "session-token" }` — exact match on `(domain, name)`.
+- Each storage permission also supports a `deny` array using the same shape. `deny` is evaluated before `allow`.
 
 ## Usage
 
@@ -231,12 +271,13 @@ Removes secure data.
 
 ### Windows
 
-- Supports Windows Hello (fingerprint, face, PIN)
-- Full secure data storage using Windows Hello credentials
-- Data is encrypted using AES-256 with Windows Hello protected keys
-- **Note:** `setData` will prompt for Windows Hello authentication when storing data
-- Automatically focuses Windows Hello dialog
-- Returns `BiometryType.Auto` as it uses Windows Hello's automatic selection
+- Supports Windows Hello (fingerprint, face, PIN). Returns `BiometryType.Auto` because Hello picks the modality.
+- Storage uses the platform WebAuthn API (`webauthn.dll`) with the `hmac-secret` / PRF extension as the key-derivation source. A Hello-bound credential is enrolled per `(app-identifier, domain)`; the 32-byte PRF output is used directly as the AES-256-GCM key (it's HMAC-SHA-256 output, already a uniform 256-bit secret, so a KDF on top would be redundant). Per-record uniqueness comes from a fresh 32-byte random salt (the PRF input) and a fresh 12-byte random IV stored alongside the ciphertext.
+- AES-GCM AAD binds each ciphertext to `(version, domain, name, salt, credential_id)`, so a stored blob cannot be replayed under a different `name`/`domain` in the vault.
+- `authenticate` parents the Hello dialog to the calling Tauri window via `IUserConsentVerifierInterop::RequestVerificationForWindowAsync`, so the prompt always renders on top.
+- **Requirements:** Windows 11 with WebAuthn API ≥ v8 (needed for create-time PRF eval) and a user-verifying platform authenticator. `checkStatus()` probes both before reporting `isAvailable`.
+- **First setData per `(app-identifier, domain)`** shows Windows' "Save your passkey" consent dialog once — that's the platform credential being enrolled. Subsequent `setData`/`getData` on the same domain only show the biometric/PIN prompt.
+- `removeData` deletes the underlying WebAuthn credential when the last `name` in a domain is removed, so the passkey list stays clean.
 
 ## Error Codes
 
@@ -258,13 +299,16 @@ Common error codes returned by the plugin:
 - `keychainError` - Generic keychain operation error
 - `internalError` - Internal plugin error
 - `notSupported` - Operation not supported on this platform
+- `scopeDenied` - The requested `(domain, name)` is not in the capability's `allow` list (or is in `deny`)
+- `dataNeedsReenrollment` - Stored Windows blob is from a previous plugin version and must be removed before re-storing
 
 ## Security Considerations
 
 - All secure data is stored in the system keychain (macOS/iOS), Android Keystore, or Windows Credential Manager
 - Data is encrypted and can only be accessed after successful biometric authentication
 - The plugin follows platform-specific security best practices
-- Windows uses AES-256 encryption with keys derived from Windows Hello credentials
+- Windows uses AES-256-GCM with the key derived from the Windows Hello credential's WebAuthn `hmac-secret` / PRF output; the ciphertext is bound to `(version, domain, name, salt, credential_id)` via AES-GCM AAD
+- Permission scoping (see *Permissions* above) is the primary authorization boundary — only the `(domain, name)` pairs declared in a capability's `allow` array are reachable from that webview, even if `biometry:allow-get-data` etc. is granted
 - **macOS Code Signing:** Your app must be properly code-signed to use keychain storage on macOS. Development builds may work with ad-hoc signing, but production apps require valid Developer ID or App Store signing
 - Consider implementing additional application-level encryption for highly sensitive data
 

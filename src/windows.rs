@@ -754,7 +754,23 @@ impl<R: Runtime> Biometry<R> {
         };
         let resource = HSTRING::from(&domain);
         let username = HSTRING::from(&name);
-        Ok(vault.Retrieve(&resource, &username).is_ok())
+
+        // Verify the entry is actually a plugin-format blob, not some
+        // unrelated record that happens to share the same (resource,
+        // username) key in PasswordVault. Otherwise `has_data` would lie
+        // about existence and the caller would only find out at `get_data`
+        // decode time. None of these calls prompts Hello — PasswordVault
+        // access is gated by the Windows user session, not biometric UV.
+        let Ok(cred) = vault.Retrieve(&resource, &username) else {
+            return Ok(false);
+        };
+        if cred.RetrievePassword().is_err() {
+            return Ok(false);
+        }
+        let Ok(password) = cred.Password() else {
+            return Ok(false);
+        };
+        Ok(decode_blob(&password.to_string()).is_ok())
     }
 
     #[allow(clippy::needless_pass_by_value)]

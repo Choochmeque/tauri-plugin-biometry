@@ -1,20 +1,35 @@
 ## Default Permission
 
-This permission set configures which
-biometry features are by default exposed.
+This permission set configures the biometry commands that are safe to grant
+without any per-call scoping.
 
 #### Granted Permissions
 
-It allows acccess to all biometry commands.
+Only the non-storage commands (`status` and `authenticate`) are granted by
+default. Storage commands (`has_data`, `get_data`, `set_data`, `remove_data`)
+require explicit per-capability grants together with an `allow` scope listing
+the `(domain, name)` pairs the calling webview is permitted to touch.
+
+Example capability JSON for storage:
+
+```json
+{
+  "identifier": "default",
+  "windows": ["main"],
+  "permissions": [
+    "biometry:default",
+    { "identifier": "biometry:allow-get-data",
+      "allow": [{ "domain": "com.myapp.creds" }] },
+    { "identifier": "biometry:allow-set-data",
+      "allow": [{ "domain": "com.myapp.creds" }] }
+  ]
+}
+```
 
 #### This default permission set includes the following:
 
 - `allow-authenticate`
 - `allow-status`
-- `allow-has-data`
-- `allow-get-data`
-- `allow-set-data`
-- `allow-remove-data`
 
 ## Permission Table
 
