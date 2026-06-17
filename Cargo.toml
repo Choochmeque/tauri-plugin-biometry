@@ -37,7 +37,6 @@ windows = { version = "0.61", features = [
     "Security_Credentials",
     "Security_Credentials_UI",
     "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
     "Win32_Networking_WindowsWebServices",
 ] }
 aes-gcm = "0.10"

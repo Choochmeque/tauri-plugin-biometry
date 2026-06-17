@@ -36,9 +36,6 @@ use windows::{
         WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
         WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
     },
-    Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
-    },
 };
 
 use crate::error::{ErrorResponse, PluginInvokeError};
@@ -81,34 +78,6 @@ impl WideStr {
     fn pcwstr(&self) -> PCWSTR {
         PCWSTR(self.0.as_ptr())
     }
-}
-
-fn try_focus_hello_dialog_once() -> bool {
-    let cls = to_wide_z("Credential Dialog Xaml Host");
-    unsafe {
-        let hwnd = FindWindowW(PCWSTR(cls.as_ptr()), PCWSTR::null());
-        if let Ok(hwnd) = hwnd {
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            }
-            let _ = BringWindowToTop(hwnd);
-            let _ = SetForegroundWindow(hwnd);
-            return true;
-        }
-    }
-    false
-}
-
-fn nudge_hello_dialog_focus_async(retries: u32, delay_ms: u64) {
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-        for _ in 0..retries {
-            if try_focus_hello_dialog_once() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-        }
-    });
 }
 
 fn validate_domain(domain: &str) -> Result<(), &'static str> {
@@ -281,8 +250,6 @@ fn make_webauthn_credential(
     options.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
     options.dwFlags = 0;
 
-    nudge_hello_dialog_focus_async(5, 250);
-
     let attestation_ptr = unsafe {
         WebAuthNAuthenticatorMakeCredential(
             hwnd,
@@ -371,8 +338,6 @@ fn get_assertion_prf(
     options.dwFlags = 0;
     options.pAllowCredentialList = &mut allow_list;
     options.pHmacSecretSaltValues = &mut salt_values;
-
-    nudge_hello_dialog_focus_async(5, 250);
 
     let assertion_ptr = unsafe {
         WebAuthNAuthenticatorGetAssertion(hwnd, rp_id_w.pcwstr(), &client_data, Some(&options))?
@@ -485,10 +450,7 @@ impl<R: Runtime> Biometry<R> {
     #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
     pub fn authenticate(&self, reason: String, _options: AuthOptions) -> crate::Result<()> {
         let result = UserConsentVerifier::RequestVerificationAsync(&HSTRING::from(reason))
-            .and_then(|async_op| {
-                nudge_hello_dialog_focus_async(5, 250);
-                async_op.get()
-            })
+            .and_then(|async_op| async_op.get())
             .map_err(|e| reject_fmt("internalError", "Failed to request user verification", &e))?;
 
         match result {
