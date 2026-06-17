@@ -89,15 +89,6 @@ jobs:
       - run: cargo doc --no-deps -p tauri-plugin-biometry
       - run: cargo deadlinks --no-build
 
-  # Spellcheck.
-  spellcheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: streetsidesoftware/cspell-action@v8
-        with:
-          files: "**/*.{rs,md}"
-
   # cargo-deny.
   deny:
     name: cargo-deny

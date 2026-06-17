@@ -41,6 +41,7 @@ impl<R: Runtime, T: Manager<R>> crate::BiometryExt<R> for T {
 }
 
 /// Initializes the plugin.
+#[must_use]
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("biometry")
         .invoke_handler(tauri::generate_handler![

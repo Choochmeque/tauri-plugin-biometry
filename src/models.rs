@@ -11,7 +11,7 @@ pub struct AuthOptions {
     pub fallback_title: Option<String>,
     /// Title indicating the purpose of biometry verification. This feature is available Android only.
     pub title: Option<String>,
-    /// SubTitle providing contextual information of biometry verification. This feature is available Android only.
+    /// Subtitle providing contextual information of biometry verification. This feature is available Android only.
     pub subtitle: Option<String>,
     /// Specifies whether additional user confirmation is required, such as pressing a button after successful biometry authentication. This feature is available Android only.
     pub confirmation_required: Option<bool>,
