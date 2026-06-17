@@ -606,8 +606,7 @@ impl<R: Runtime> Biometry<R> {
             });
         }
         let platform_auth = unsafe { WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable() }
-            .map(|b| b.as_bool())
-            .unwrap_or(false);
+            .is_ok_and(BOOL::as_bool);
         if !platform_auth {
             return Ok(Status {
                 is_available: false,
