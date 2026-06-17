@@ -387,10 +387,21 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         coroutineScope.launch {
             try {
                 val scope = scopeId(args.domain, args.name)
-                val key = stringPreferencesKey(scope)
+                val alias = keystoreAlias(args.domain, args.name)
+                val dataKey = stringPreferencesKey(scope)
+                val ivKey = stringPreferencesKey("${scope}_iv")
+                val aesKey = stringPreferencesKey("${scope}_key")
+
+                // A record is only complete if ciphertext, IV, wrapped AES
+                // key, and the matching Keystore entry are all present.
+                // Otherwise hasData() would lie and getData() would fail.
                 val hasData = dataStore.data
-                    .map { preferences -> preferences.contains(key) }
-                    .first()
+                    .map { preferences ->
+                        preferences.contains(dataKey) &&
+                            preferences.contains(ivKey) &&
+                            preferences.contains(aesKey)
+                    }
+                    .first() && getKeyPair(alias) != null
 
                 val result = JSObject()
                 result.put("hasData", hasData)
