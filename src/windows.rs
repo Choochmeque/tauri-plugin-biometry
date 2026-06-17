@@ -23,13 +23,18 @@ use windows::{
         WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation,
         WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
-        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS, WEBAUTHN_CLIENT_DATA,
-        WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
+        WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6,
+        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS,
+        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_3, WEBAUTHN_CLIENT_DATA,
+        WEBAUTHN_CLIENT_DATA_CURRENT_VERSION, WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
         WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
-        WEBAUTHN_COSE_CREDENTIAL_PARAMETERS, WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_LIST,
+        WEBAUTHN_COSE_CREDENTIAL_PARAMETERS, WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
+        WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_LIST,
         WEBAUTHN_EXTENSION, WEBAUTHN_EXTENSIONS, WEBAUTHN_HMAC_SECRET_SALT,
         WEBAUTHN_HMAC_SECRET_SALT_VALUES, WEBAUTHN_RP_ENTITY_INFORMATION,
-        WEBAUTHN_USER_ENTITY_INFORMATION, WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
+        WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION, WEBAUTHN_USER_ENTITY_INFORMATION,
+        WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
+        WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
     },
     Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
@@ -49,14 +54,6 @@ const AES_GCM_NONCE_LEN: usize = 12;
 const PRF_OUT_LEN: usize = 32;
 const MAX_DOMAIN_LEN: usize = 64;
 const WEBAUTHN_TIMEOUT_MS: u32 = 60_000;
-
-const MAKE_CRED_OPTIONS_VERSION: u32 = 3;
-const GET_ASSERT_OPTIONS_VERSION: u32 = 6;
-const CLIENT_DATA_VERSION: u32 = 1;
-const RP_ENTITY_VERSION: u32 = 1;
-const USER_ENTITY_VERSION: u32 = 1;
-const COSE_CRED_PARAM_VERSION: u32 = 1;
-const CRED_EX_VERSION: u32 = 1;
 
 // Signature must match the cross-platform plugin contract — return type is
 // fixed even though Windows init can't fail.
@@ -207,7 +204,7 @@ fn make_webauthn_credential(
     let rp_id_w = WideStr::new(rp_id_str);
     let rp_name_w = WideStr::new(rp_id_str);
     let rp = WEBAUTHN_RP_ENTITY_INFORMATION {
-        dwVersion: RP_ENTITY_VERSION,
+        dwVersion: WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION,
         pwszId: rp_id_w.pcwstr(),
         pwszName: rp_name_w.pcwstr(),
         pwszIcon: PCWSTR::null(),
@@ -218,7 +215,7 @@ fn make_webauthn_credential(
     let user_name_w = WideStr::new(user_label);
     let user_display_w = WideStr::new(user_label);
     let user = WEBAUTHN_USER_ENTITY_INFORMATION {
-        dwVersion: USER_ENTITY_VERSION,
+        dwVersion: WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
         cbId: user_id.len() as u32,
         pbId: user_id.as_mut_ptr(),
         pwszName: user_name_w.pcwstr(),
@@ -235,7 +232,7 @@ fn make_webauthn_credential(
     let mut client_data_bytes = client_data_json.into_bytes();
     let hash_alg_w = WideStr::new("SHA-256");
     let client_data = WEBAUTHN_CLIENT_DATA {
-        dwVersion: CLIENT_DATA_VERSION,
+        dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
         cbClientDataJSON: client_data_bytes.len() as u32,
         pbClientDataJSON: client_data_bytes.as_mut_ptr(),
         pwszHashAlgId: hash_alg_w.pcwstr(),
@@ -244,12 +241,12 @@ fn make_webauthn_credential(
     let public_key_type_w = WideStr::new("public-key");
     let mut params = [
         WEBAUTHN_COSE_CREDENTIAL_PARAMETER {
-            dwVersion: COSE_CRED_PARAM_VERSION,
+            dwVersion: WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
             pwszCredentialType: public_key_type_w.pcwstr(),
             lAlg: WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256,
         },
         WEBAUTHN_COSE_CREDENTIAL_PARAMETER {
-            dwVersion: COSE_CRED_PARAM_VERSION,
+            dwVersion: WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
             pwszCredentialType: public_key_type_w.pcwstr(),
             lAlg: WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256,
         },
@@ -272,7 +269,7 @@ fn make_webauthn_credential(
     };
 
     let mut options: WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS = unsafe { std::mem::zeroed() };
-    options.dwVersion = MAKE_CRED_OPTIONS_VERSION;
+    options.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_3;
     options.dwTimeoutMilliseconds = WEBAUTHN_TIMEOUT_MS;
     options.Extensions = extensions;
     options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM;
@@ -330,7 +327,7 @@ fn get_assertion_prf(
     let mut client_data_bytes = client_data_json.into_bytes();
     let hash_alg_w = WideStr::new("SHA-256");
     let client_data = WEBAUTHN_CLIENT_DATA {
-        dwVersion: CLIENT_DATA_VERSION,
+        dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
         cbClientDataJSON: client_data_bytes.len() as u32,
         pbClientDataJSON: client_data_bytes.as_mut_ptr(),
         pwszHashAlgId: hash_alg_w.pcwstr(),
@@ -339,7 +336,7 @@ fn get_assertion_prf(
     let public_key_type_w = WideStr::new("public-key");
     let mut cred_id_bytes = credential_id.to_vec();
     let mut cred_ex = WEBAUTHN_CREDENTIAL_EX {
-        dwVersion: CRED_EX_VERSION,
+        dwVersion: WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION,
         cbId: cred_id_bytes.len() as u32,
         pbId: cred_id_bytes.as_mut_ptr(),
         pwszCredentialType: public_key_type_w.pcwstr(),
@@ -365,7 +362,7 @@ fn get_assertion_prf(
     };
 
     let mut options: WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS = unsafe { std::mem::zeroed() };
-    options.dwVersion = GET_ASSERT_OPTIONS_VERSION;
+    options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6;
     options.dwTimeoutMilliseconds = WEBAUTHN_TIMEOUT_MS;
     options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM;
     options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
