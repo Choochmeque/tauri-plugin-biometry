@@ -257,9 +257,13 @@ Removes secure data.
 
 ### Android
 
-- Supports fingerprint, face, and iris recognition
-- Dialog appearance can be customized with `title` and `subtitle`
-- Supports `confirmationRequired` for additional security
+- Supports fingerprint, face, and iris recognition.
+- Dialog appearance can be customized with `title` and `subtitle`, and `confirmationRequired` enforces explicit confirmation.
+- Storage is per-`(domain, name)`: a fresh AES-256 key encrypts the payload with AES-GCM and a random 12-byte IV, and that AES key is wrapped with a per-record 4096-bit RSA keypair held in AndroidKeyStore using OAEP with SHA-256 as the OAEP digest and SHA-1 as the MGF1 digest (the SHA-1 MGF1 matches AndroidKeyStore's internal default; SHA-256 is what protects the OAEP construction). The RSA key is auth-bound (`setUserAuthenticationRequired(true)`) and `setInvalidatedByBiometricEnrollment(true)`, so changing the enrolled biometric invalidates the record.
+- The Keystore alias is `biometry_` + SHA-256 hex of `len(domain):domain:name`, so different `(domain, name)` records never share a keystore entry and same-named records under different domains never collide.
+- AES-GCM AAD binds each ciphertext to `(version, algorithm-id, domain, name)`, so a stored blob cannot be replayed under a different `(domain, name)` or after a future algorithm change.
+- Encrypted blobs and wrapped keys live in a Preferences DataStore that is excluded from both cloud backups (`dataExtractionRules`) and device-to-device transfers.
+- `domain` and `name` are validated on every call: non-empty, `domain` ≤ 64 chars and matching `[A-Za-z0-9._-]`, `name` ≤ 256 chars.
 
 ### macOS
 
@@ -308,6 +312,7 @@ Common error codes returned by the plugin:
 - Data is encrypted and can only be accessed after successful biometric authentication
 - The plugin follows platform-specific security best practices
 - Windows uses AES-256-GCM with the key derived from the Windows Hello credential's WebAuthn `hmac-secret` / PRF output; the ciphertext is bound to `(version, domain, name, salt, credential_id)` via AES-GCM AAD
+- Android uses AES-256-GCM with a fresh per-record AES key wrapped by a per-record AndroidKeyStore RSA-4096 key using OAEP (SHA-256 digest, MGF1 SHA-1 — matching AndroidKeyStore's internal MGF1); the wrapping key is auth-bound and biometric-enrollment-invalidated; the ciphertext is bound to `(version, algorithm-id, domain, name)` via AES-GCM AAD, and the DataStore file is excluded from cloud backups and device transfers
 - Permission scoping (see *Permissions* above) is the primary authorization boundary — only the `(domain, name)` pairs declared in a capability's `allow` array are reachable from that webview, even if `biometry:allow-get-data` etc. is granted
 - **macOS Code Signing:** Your app must be properly code-signed to use keychain storage on macOS. Development builds may work with ad-hoc signing, but production apps require valid Developer ID or App Store signing
 - Consider implementing additional application-level encryption for highly sensitive data

@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
-        <!-- Exclude biometric DataStore from backups -->
-        <exclude domain="sharedpref" path="biometric_data.preferences_pb"/>
+        <!-- Preferences DataStore lives at files/datastore/<name>.preferences_pb,
+             which maps to domain="file" in backup rules. -->
+        <exclude domain="file" path="datastore/biometric_data.preferences_pb"/>
     </cloud-backup>
     <device-transfer>
-        <!-- Also exclude from device-to-device transfers -->
-        <exclude domain="sharedpref" path="biometric_data.preferences_pb"/>
+        <exclude domain="file" path="datastore/biometric_data.preferences_pb"/>
     </device-transfer>
 </data-extraction-rules>

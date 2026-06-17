@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Exclude biometric DataStore from backups (legacy format for API < 31) -->
-    <exclude domain="sharedpref" path="biometric_data.preferences_pb"/>
+    <!-- Preferences DataStore lives at files/datastore/<name>.preferences_pb,
+         which maps to domain="file" in backup rules (API < 31). -->
+    <exclude domain="file" path="datastore/biometric_data.preferences_pb"/>
 </full-backup-content>

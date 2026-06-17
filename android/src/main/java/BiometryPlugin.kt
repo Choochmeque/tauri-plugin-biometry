@@ -38,6 +38,10 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import javax.crypto.spec.OAEPParameterSpec
+import javax.crypto.spec.PSource
+import java.security.spec.MGF1ParameterSpec
+import java.security.MessageDigest
 import java.security.SecureRandom
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -110,7 +114,6 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     private val coroutineScope = CoroutineScope(Dispatchers.IO)
 
     companion object {
-        var RESULT_EXTRA_PREFIX = ""
         const val TITLE = "title"
         const val SUBTITLE = "subtitle"
         const val REASON = "reason"
@@ -121,12 +124,18 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         const val DEVICE_CREDENTIAL = "allowDeviceCredential"
         const val CONFIRMATION_REQUIRED = "confirmationRequired"
         
-        private const val RSA_CIPHER_CONFIG = "RSA/ECB/PKCS1Padding"
+        private const val RSA_CIPHER_CONFIG = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"
         private const val AES_CIPHER_CONFIG = "AES/GCM/NoPadding"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val AES_KEY_SIZE = 256
         private const val GCM_IV_LENGTH = 12
         private const val GCM_TAG_LENGTH = 128
+        private const val RECORD_AAD_VERSION = "v1"
+        private const val RECORD_AAD_ALG = "AES-256-GCM+RSA-OAEP-SHA256"
+        private const val MAX_DOMAIN_LEN = 64
+        private const val MAX_NAME_LEN = 256
+        private const val KEYSTORE_ALIAS_PREFIX = "biometry_"
+        private val DOMAIN_PATTERN = Regex("^[A-Za-z0-9._-]+$")
 
         // Maps biometry error numbers to string error codes
         private var biometryErrorCodeMap: MutableMap<Int, String> = HashMap()
@@ -230,8 +239,6 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
      */
     @Command
     fun authenticate(invoke: Invoke) {
-        // The result of an intent is supposed to have the package name as a prefix
-        RESULT_EXTRA_PREFIX = activity.packageName + "."
         val intent = Intent(
             activity,
             BiometryActivity::class.java
@@ -272,10 +279,14 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
             return
         }
 
+        // Derive the prefix locally per call instead of relying on shared
+        // mutable state.
+        val prefix = "${activity.packageName}."
+
         // Convert the string result type to an enum
         val data = result.data
         val resultTypeName = data?.getStringExtra(
-            RESULT_EXTRA_PREFIX + RESULT_TYPE
+            prefix + RESULT_TYPE
         )
         if (resultTypeName == null) {
             invoke.reject(
@@ -294,11 +305,11 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
             return
         }
         val errorCode = data.getIntExtra(
-            RESULT_EXTRA_PREFIX + RESULT_ERROR_CODE,
+            prefix + RESULT_ERROR_CODE,
             0
         )
         var errorMessage = data.getStringExtra(
-            RESULT_EXTRA_PREFIX + RESULT_ERROR_MESSAGE
+            prefix + RESULT_ERROR_MESSAGE
         )
         when (resultType) {
             BiometryResultType.SUCCESS -> invoke.resolve()
@@ -333,10 +344,20 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
         )
             .setKeySize(4096)
             .setBlockModes(KeyProperties.BLOCK_MODE_ECB)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)
+            // SHA-256 = OAEP digest. SHA-1 is needed because AndroidKeyStore's
+            // MGF1 is wired to SHA-1 internally (see oaepSpec()).
+            .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA1)
             .setUserAuthenticationRequired(true)
             .setInvalidatedByBiometricEnrollment(true)
-        
+
+        // API 34+ requires MGF1 digests to be authorized separately from the
+        // OAEP digest — setDigests() no longer covers MGF1. Without this the
+        // keystore rejects the operation with INCOMPATIBLE_MGF_DIGEST.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            builder.setMgf1Digests(KeyProperties.DIGEST_SHA1)
+        }
+
         keyPairGenerator.initialize(builder.build())
         
         return keyPairGenerator.generateKeyPair()
@@ -362,14 +383,36 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun hasData(invoke: Invoke) {
         val args = invoke.parseArgs(DataOptions::class.java)
-        
+
+        // Match the Windows behavior: invalid input yields `hasData: false`
+        // rather than an error, so callers can probe without surfacing
+        // validation failures as exceptions.
+        if (validateIdentity(args.domain, args.name) != null) {
+            val result = JSObject()
+            result.put("hasData", false)
+            invoke.resolve(result)
+            return
+        }
+
         coroutineScope.launch {
             try {
-                val key = stringPreferencesKey(args.name)
+                val scope = scopeId(args.domain, args.name)
+                val alias = keystoreAlias(args.domain, args.name)
+                val dataKey = stringPreferencesKey(scope)
+                val ivKey = stringPreferencesKey("${scope}_iv")
+                val aesKey = stringPreferencesKey("${scope}_key")
+
+                // A record is only complete if ciphertext, IV, wrapped AES
+                // key, and the matching Keystore entry are all present.
+                // Otherwise hasData() would lie and getData() would fail.
                 val hasData = dataStore.data
-                    .map { preferences -> preferences.contains(key) }
-                    .first()
-                
+                    .map { preferences ->
+                        preferences.contains(dataKey) &&
+                            preferences.contains(ivKey) &&
+                            preferences.contains(aesKey)
+                    }
+                    .first() && getKeyPair(alias) != null
+
                 val result = JSObject()
                 result.put("hasData", hasData)
                 invoke.resolve(result)
@@ -382,27 +425,34 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun setData(invoke: Invoke) {
         val args = invoke.parseArgs(SetDataOptions::class.java)
-        
+
+        validateIdentity(args.domain, args.name)?.let {
+            invoke.reject(it, "invalidInput")
+            return
+        }
+
         coroutineScope.launch {
             try {
-                val dataKey = stringPreferencesKey(args.name)
-                val ivKey = stringPreferencesKey("${args.name}_iv")
-                val aesKey = stringPreferencesKey("${args.name}_key")
-                
+                val scope = scopeId(args.domain, args.name)
+                val alias = keystoreAlias(args.domain, args.name)
+                val dataKey = stringPreferencesKey(scope)
+                val ivKey = stringPreferencesKey("${scope}_iv")
+                val aesKey = stringPreferencesKey("${scope}_key")
+
                 // Clear existing data
                 dataStore.edit { preferences ->
                     preferences.remove(dataKey)
                     preferences.remove(ivKey)
                     preferences.remove(aesKey)
                 }
-                
+
                 // Delete the key from keystore
                 val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
                 keyStore.load(null)
-                keyStore.deleteEntry(args.domain)
+                keyStore.deleteEntry(alias)
 
                 // Generate RSA key pair for encrypting AES key
-                val keyPair = generateKeyPair(args.domain)
+                val keyPair = generateKeyPair(alias)
                 
                 // Generate AES key for data encryption
                 val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES)
@@ -413,15 +463,19 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                 val iv = ByteArray(GCM_IV_LENGTH)
                 SecureRandom().nextBytes(iv)
                 
-                // Encrypt data with AES-GCM
+                // Encrypt data with AES-GCM. AAD binds the ciphertext to its
+                // logical record (version, algorithm, domain, name) so a blob
+                // can't be replayed under a different identity.
                 val aesCipher = Cipher.getInstance(AES_CIPHER_CONFIG)
                 val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
                 aesCipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
+                aesCipher.updateAAD(recordAad(args.domain, args.name))
                 val encryptedData = aesCipher.doFinal(args.data.toByteArray())
                 
-                // Encrypt AES key with RSA
+                // Encrypt AES key with RSA-OAEP (SHA-256 for both OAEP digest
+                // and MGF1; AndroidKeyStore otherwise defaults MGF1 to SHA-1).
                 val rsaCipher = Cipher.getInstance(RSA_CIPHER_CONFIG)
-                rsaCipher.init(Cipher.ENCRYPT_MODE, keyPair.getPublic())
+                rsaCipher.init(Cipher.ENCRYPT_MODE, keyPair.getPublic(), oaepSpec())
                 val encryptedAesKey = rsaCipher.doFinal(secretKey.encoded)
                 
                 // Store encrypted data, IV, and encrypted AES key
@@ -441,16 +495,23 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun getData(invoke: Invoke) {
         val args = invoke.parseArgs(GetDataOptions::class.java)
-        
+
+        validateIdentity(args.domain, args.name)?.let {
+            invoke.reject(it, "invalidInput")
+            return
+        }
+
         try {
-            val keyPair = getKeyPair(args.domain)
+            val scope = scopeId(args.domain, args.name)
+            val alias = keystoreAlias(args.domain, args.name)
+            val keyPair = getKeyPair(alias)
             if (keyPair == null) {
                 invoke.reject("No key pair found")
                 return
             }
             
             val rsaCipher = Cipher.getInstance(RSA_CIPHER_CONFIG)
-            rsaCipher.init(Cipher.DECRYPT_MODE, keyPair.getPrivate())
+            rsaCipher.init(Cipher.DECRYPT_MODE, keyPair.getPrivate(), oaepSpec())
             
             val promptInfo = BiometricPrompt.PromptInfo.Builder()
                 .setTitle(args.title ?: (biometryNameMap[biometryTypes[0]] ?: ""))
@@ -475,9 +536,9 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                                 val rsaCipher = result.cryptoObject?.cipher
                                     ?: throw Exception("Cipher is null")
                                 
-                                val dataKey = stringPreferencesKey(args.name)
-                                val ivKey = stringPreferencesKey("${args.name}_iv")
-                                val aesKeyKey = stringPreferencesKey("${args.name}_key")
+                                val dataKey = stringPreferencesKey(scope)
+                                val ivKey = stringPreferencesKey("${scope}_iv")
+                                val aesKeyKey = stringPreferencesKey("${scope}_key")
                                 
                                 val preferences = dataStore.data.first()
                                 val encryptedData = preferences[dataKey]
@@ -493,12 +554,14 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
                                 )
                                 val secretKey = SecretKeySpec(aesKeyBytes, "AES")
                                 
-                                // Decrypt data with AES-GCM
+                                // Decrypt data with AES-GCM; AAD must match the
+                                // identity bound at encrypt time or the tag fails.
                                 val iv = Base64.decode(ivString, Base64.DEFAULT)
                                 val aesCipher = Cipher.getInstance(AES_CIPHER_CONFIG)
                                 val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
                                 aesCipher.init(Cipher.DECRYPT_MODE, secretKey, gcmSpec)
-                                
+                                aesCipher.updateAAD(recordAad(args.domain, args.name))
+
                                 val decryptedBytes = aesCipher.doFinal(
                                     Base64.decode(encryptedData, Base64.DEFAULT)
                                 )
@@ -542,28 +605,97 @@ class BiometryPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun removeData(invoke: Invoke) {
         val args = invoke.parseArgs(RemoveDataOptions::class.java)
-        
+
+        validateIdentity(args.domain, args.name)?.let {
+            invoke.reject(it, "invalidInput")
+            return
+        }
+
         coroutineScope.launch {
             try {
-                val dataKey = stringPreferencesKey(args.name)
-                val ivKey = stringPreferencesKey("${args.name}_iv")
-                val aesKey = stringPreferencesKey("${args.name}_key")
-                
+                val scope = scopeId(args.domain, args.name)
+                val alias = keystoreAlias(args.domain, args.name)
+                val dataKey = stringPreferencesKey(scope)
+                val ivKey = stringPreferencesKey("${scope}_iv")
+                val aesKey = stringPreferencesKey("${scope}_key")
+
                 dataStore.edit { preferences ->
                     preferences.remove(dataKey)
                     preferences.remove(ivKey)
                     preferences.remove(aesKey)
                 }
-                
+
                 // Delete the key from keystore
                 val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
                 keyStore.load(null)
-                keyStore.deleteEntry(args.domain)
-                
+                keyStore.deleteEntry(alias)
+
                 invoke.resolve()
             } catch (e: Exception) {
                 invoke.reject("Failed to remove data: ${e.message}")
             }
         }
+    }
+
+    // Scope every storage identifier by both domain and name so records under
+    // the same name in different domains — or different names in the same
+    // domain — never collide or invalidate each other.
+    private fun scopeId(domain: String, name: String): String {
+        return "${domain.length}:$domain:$name"
+    }
+
+    // Mirror the Rust/Windows validation: reject empty, cap lengths, and
+    // restrict domain to a documented safe shape. Returns null on success or
+    // a short error message on failure.
+    private fun validateIdentity(domain: String, name: String): String? {
+        if (domain.isEmpty() || name.isEmpty()) {
+            return "domain and name must not be empty"
+        }
+        if (domain.length > MAX_DOMAIN_LEN) {
+            return "domain exceeds maximum length"
+        }
+        if (name.length > MAX_NAME_LEN) {
+            return "name exceeds maximum length"
+        }
+        if (!DOMAIN_PATTERN.matches(domain)) {
+            return "domain must match [A-Za-z0-9._-]"
+        }
+        return null
+    }
+
+    // Keystore aliases vary in length tolerance across OEMs; hash the scoped
+    // identity to a fixed-length, safe-character alias.
+    private fun keystoreAlias(domain: String, name: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(scopeId(domain, name).toByteArray(Charsets.UTF_8))
+        val hex = StringBuilder(digest.size * 2)
+        for (b in digest) {
+            hex.append(String.format("%02x", b))
+        }
+        return "$KEYSTORE_ALIAS_PREFIX$hex"
+    }
+
+    private fun oaepSpec(): OAEPParameterSpec {
+        // AndroidKeyStore's RSA/OAEP implementation uses SHA-1 for MGF1
+        // internally regardless of the transformation name, and on emulators
+        // it silently ignores an MGF1=SHA-256 OAEPParameterSpec — yielding
+        // "Keystore operation failed". Pin MGF1 to SHA-1 so encrypt/decrypt
+        // agree on what the keystore actually does. The OAEP digest stays
+        // SHA-256, which is the part that matters for security.
+        return OAEPParameterSpec(
+            "SHA-256",
+            "MGF1",
+            MGF1ParameterSpec.SHA1,
+            PSource.PSpecified.DEFAULT
+        )
+    }
+
+    // Length-prefixed AAD covering version, algorithm id, domain, and name.
+    // Bump RECORD_AAD_VERSION on any change to the wrapping/AEAD construction
+    // so old ciphertext fails closed instead of being misinterpreted.
+    private fun recordAad(domain: String, name: String): ByteArray {
+        val payload = "$RECORD_AAD_VERSION|$RECORD_AAD_ALG|" +
+            "${domain.length}:$domain|${name.length}:$name"
+        return payload.toByteArray(Charsets.UTF_8)
     }
 }
