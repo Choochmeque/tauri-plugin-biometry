@@ -159,11 +159,33 @@ fn decode_blob(data: &str) -> Result<Blob, String> {
     Ok(blob)
 }
 
-fn aad_for(credential_id: &[u8]) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(1 + credential_id.len());
-    aad.push(BLOB_VERSION);
-    aad.extend_from_slice(credential_id);
-    aad
+// Binds the ciphertext to the full logical record key — `version`, `domain`,
+// `name`, `salt`, and `credential_id`. Without all five, a blob written for
+// (domain=X, name=A) could be replayed at (domain=X, name=B) — or under a
+// different salt — and still pass AES-GCM authentication.
+fn aad_for(
+    domain: &str,
+    name: &str,
+    salt: &[u8],
+    credential_id: &[u8],
+) -> Result<Vec<u8>, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Aad<'a> {
+        v: u8,
+        domain: &'a str,
+        name: &'a str,
+        #[serde(with = "b64_field")]
+        salt: Vec<u8>,
+        #[serde(with = "b64_field")]
+        cred: Vec<u8>,
+    }
+    serde_json::to_vec(&Aad {
+        v: BLOB_VERSION,
+        domain,
+        name,
+        salt: salt.to_vec(),
+        cred: credential_id.to_vec(),
+    })
 }
 
 // -------------------- WebAuthn helpers --------------------
@@ -754,7 +776,8 @@ impl<R: Runtime> Biometry<R> {
         let cipher = Aes256Gcm::new_from_slice(&prf_out)
             .map_err(|e| reject("internalError", &format!("aes key init: {e}")))?;
         let nonce = Nonce::from_slice(&blob.iv);
-        let aad = aad_for(&blob.cred);
+        let aad = aad_for(&domain, &name, &blob.salt, &blob.cred)
+            .map_err(|e| reject("internalError", &format!("aad: {e}")))?;
         let plaintext = cipher
             .decrypt(
                 nonce,
@@ -813,7 +836,8 @@ impl<R: Runtime> Biometry<R> {
         let cipher = Aes256Gcm::new_from_slice(&prf_out)
             .map_err(|e| reject("internalError", &format!("aes key init: {e}")))?;
         let nonce = Nonce::from_slice(&iv);
-        let aad = aad_for(&credential_id);
+        let aad = aad_for(&domain, &name, &salt, &credential_id)
+            .map_err(|e| reject("internalError", &format!("aad: {e}")))?;
         let ciphertext_with_tag = cipher
             .encrypt(
                 nonce,
