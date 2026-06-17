@@ -30,7 +30,12 @@ impl<R: Runtime> Biometry<R> {
     }
 
     #[allow(clippy::unused_self)]
-    pub fn authenticate(&self, _reason: String, _options: AuthOptions) -> crate::Result<()> {
+    pub fn authenticate(
+        &self,
+        _window: WebviewWindow<R>,
+        _reason: String,
+        _options: AuthOptions,
+    ) -> crate::Result<()> {
         Err(crate::Error::from(std::io::Error::other(
             "Biometry is not supported on this platform",
         )))

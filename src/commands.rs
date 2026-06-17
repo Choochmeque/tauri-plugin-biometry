@@ -16,8 +16,9 @@ pub async fn authenticate<R: Runtime>(
     reason: String,
     options: AuthOptions,
     app: AppHandle<R>,
+    window: WebviewWindow<R>,
 ) -> Result<()> {
-    app.biometry().authenticate(reason, options)
+    app.biometry().authenticate(window, reason, options)
 }
 
 #[command]

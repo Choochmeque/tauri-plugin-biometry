@@ -12,7 +12,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::{plugin::PluginApi, AppHandle, Runtime, WebviewWindow};
 
 use windows::{
-    core::{Error as WinError, BOOL, GUID, HRESULT, HSTRING, PCWSTR},
+    core::{
+        factory, Error as WinError, IInspectable, Interface, BOOL, GUID, HRESULT, HSTRING, PCWSTR,
+    },
+    Foundation::IAsyncOperation,
     Security::Credentials::UI::{
         UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
     },
@@ -241,9 +244,25 @@ struct CredentialAttestationV7 {
 
 const MAKE_CRED_OPTIONS_VERSION_8: u32 = 8;
 
+// Hand-declared because `windows` 0.61 doesn't expose this interop interface.
+// Used to invoke `UserConsentVerifier` with an HWND parent so the Hello
+// dialog is owned by our window instead of appearing behind it (which is
+// what makes the WinRT-only `RequestVerificationAsync` look like a hang).
+#[windows::core::interface("39E050C3-4E74-441A-8DC0-B81104DF949C")]
+unsafe trait IUserConsentVerifierInterop: IInspectable {
+    unsafe fn RequestVerificationForWindowAsync(
+        &self,
+        app_window: HWND,
+        message: std::mem::ManuallyDrop<HSTRING>,
+        riid: *const GUID,
+        async_operation: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
 // Creates a Hello-bound credential AND evaluates the PRF for `salt` in the
 // same operation — collapses the prior MakeCredential + GetAssertion pair
 // into one Hello prompt for first-time enrollment of a domain.
+#[allow(clippy::too_many_lines)]
 fn make_webauthn_credential_with_prf(
     hwnd: HWND,
     rp_id_str: &str,
@@ -543,9 +562,42 @@ impl<R: Runtime> Biometry<R> {
     }
 
     #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
-    pub fn authenticate(&self, reason: String, _options: AuthOptions) -> crate::Result<()> {
-        let result = UserConsentVerifier::RequestVerificationAsync(&HSTRING::from(reason))
-            .and_then(|async_op| async_op.get())
+    pub fn authenticate(
+        &self,
+        window: WebviewWindow<R>,
+        reason: String,
+        _options: AuthOptions,
+    ) -> crate::Result<()> {
+        let hwnd = window
+            .hwnd()
+            .map_err(|e| reject_fmt("internalError", "resolve window hwnd", &e))?;
+
+        // Use the interop interface to parent the Hello dialog to our HWND.
+        // Without this, RequestVerificationAsync's prompt appears behind the
+        // app window — looks like a hang because the user can't see it.
+        let interop: IUserConsentVerifierInterop =
+            factory::<UserConsentVerifier, IUserConsentVerifierInterop>()
+                .map_err(|e| reject_fmt("internalError", "get IUserConsentVerifierInterop", &e))?;
+
+        let message = std::mem::ManuallyDrop::new(HSTRING::from(reason));
+        let mut async_op_ptr: *mut c_void = std::ptr::null_mut();
+        let hr = unsafe {
+            interop.RequestVerificationForWindowAsync(
+                hwnd,
+                message,
+                &IAsyncOperation::<UserConsentVerificationResult>::IID,
+                &mut async_op_ptr,
+            )
+        };
+        hr.ok()
+            .map_err(|e| reject_fmt("internalError", "RequestVerificationForWindowAsync", &e))?;
+        if async_op_ptr.is_null() {
+            return Err(reject("internalError", "null IAsyncOperation pointer"));
+        }
+        let async_op =
+            unsafe { IAsyncOperation::<UserConsentVerificationResult>::from_raw(async_op_ptr) };
+        let result = async_op
+            .get()
             .map_err(|e| reject_fmt("internalError", "Failed to request user verification", &e))?;
 
         match result {

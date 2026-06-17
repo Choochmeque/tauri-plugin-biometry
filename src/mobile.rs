@@ -37,7 +37,12 @@ impl<R: Runtime> Biometry<R> {
         self.0.run_mobile_plugin("status", ()).map_err(Into::into)
     }
 
-    pub fn authenticate(&self, reason: String, options: AuthOptions) -> crate::Result<()> {
+    pub fn authenticate(
+        &self,
+        _window: WebviewWindow<R>,
+        reason: String,
+        options: AuthOptions,
+    ) -> crate::Result<()> {
         self.0
             .run_mobile_plugin("authenticate", AuthenticatePayload { reason, options })
             .map_err(Into::into)

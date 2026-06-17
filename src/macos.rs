@@ -106,7 +106,12 @@ impl<R: Runtime> Biometry<R> {
     }
 
     #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
-    pub fn authenticate(&self, reason: String, options: AuthOptions) -> crate::Result<()> {
+    pub fn authenticate(
+        &self,
+        _window: WebviewWindow<R>,
+        reason: String,
+        options: AuthOptions,
+    ) -> crate::Result<()> {
         let context = unsafe { LAContext::new() };
 
         // Check if biometry is available or device credential is allowed
