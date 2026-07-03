@@ -41,7 +41,7 @@ windows = { version = "0.61", features = [
 ] }
 windows-core = "0.61"
 windows-future = "0.2"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 rand = "0.10"
 base64 = "0.22"
 
