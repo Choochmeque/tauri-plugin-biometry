@@ -43,7 +43,7 @@ windows-core = "0.61"
 windows-future = "0.2"
 aes-gcm = "0.10"
 rand = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 
 [build-dependencies]
 tauri-plugin = { version = "2.4.0", features = ["build"] }
