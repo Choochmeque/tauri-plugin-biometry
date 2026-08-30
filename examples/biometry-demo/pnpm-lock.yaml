@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@choochmeque/tauri-plugin-biometry-api':
-        specifier: file:../../
+        specifier: file:../..
         version: file:../..
       '@tauri-apps/api':
         specifier: ^2
