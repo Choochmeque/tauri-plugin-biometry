@@ -5,17 +5,10 @@ import org.gradle.api.GradleException
 import org.gradle.api.logging.LogLevel
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.TaskAction
-import javax.inject.Inject
-import org.gradle.process.ExecOperations
 
-abstract class BuildTask : DefaultTask() {
-    @get:Inject
-    abstract val execOperations: ExecOperations
-
+open class BuildTask : DefaultTask() {
     @Input
     var rootDirRel: String? = null
-    @Input
-    var projectDir: String? = null
     @Input
     var target: String? = null
     @Input
@@ -34,7 +27,7 @@ abstract class BuildTask : DefaultTask() {
                     "$executable.cmd",
                     "$executable.bat",
                 )
-
+                
                 var lastException: Exception = e
                 for (fallback in fallbacks) {
                     try {
@@ -57,13 +50,13 @@ abstract class BuildTask : DefaultTask() {
         val release = release ?: throw GradleException("release cannot be null")
         val args = listOf("tauri", "android", "android-studio-script");
 
-        execOperations.exec {
-            workingDir(File(projectDir, rootDirRel))
+        project.exec {
+            workingDir(File(project.projectDir, rootDirRel))
             executable(executable)
             args(args)
-            if (logger.isEnabled(LogLevel.DEBUG)) {
+            if (project.logger.isEnabled(LogLevel.DEBUG)) {
                 args("-vv")
-            } else if (logger.isEnabled(LogLevel.INFO)) {
+            } else if (project.logger.isEnabled(LogLevel.INFO)) {
                 args("-v")
             }
             if (release) {
