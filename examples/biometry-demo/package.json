@@ -13,17 +13,18 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@choochmeque/tauri-plugin-biometry-api": "file:../../",
+    "@choochmeque/tauri-plugin-biometry-api": "file:../..",
     "@tauri-apps/api": "^2"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",
     "@sveltejs/kit": "^2.70.3",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@tauri-apps/cli": "^2",
+    "cookie": "^0.7.2",
     "svelte": "^5.56.10",
     "svelte-check": "^4.7.6",
     "typescript": "~5.6.2",
-    "vite": "^8.2.2",
-    "@tauri-apps/cli": "^2"
+    "vite": "^8.2.2"
   }
 }
