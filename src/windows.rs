@@ -822,12 +822,13 @@ impl<R: Runtime> Biometry<R> {
 
         let cipher = Aes256Gcm::new_from_slice(&prf_out)
             .map_err(|e| reject("internalError", &format!("aes key init: {e}")))?;
-        let nonce = Nonce::from_slice(&blob.iv);
+        let nonce = Nonce::try_from(blob.iv.as_slice())
+            .map_err(|_| reject("internalError", "nonce length mismatch"))?;
         let aad = aad_for(&domain, &name, &blob.salt, &blob.cred)
             .map_err(|e| reject("internalError", &format!("aad: {e}")))?;
         let plaintext = cipher
             .decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: &blob.ct,
                     aad: &aad,
@@ -882,12 +883,12 @@ impl<R: Runtime> Biometry<R> {
 
         let cipher = Aes256Gcm::new_from_slice(&prf_out)
             .map_err(|e| reject("internalError", &format!("aes key init: {e}")))?;
-        let nonce = Nonce::from_slice(&iv);
+        let nonce = Nonce::from(iv);
         let aad = aad_for(&domain, &name, &salt, &credential_id)
             .map_err(|e| reject("internalError", &format!("aad: {e}")))?;
         let ciphertext_with_tag = cipher
             .encrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: data.as_bytes(),
                     aad: &aad,
