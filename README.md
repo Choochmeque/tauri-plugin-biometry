@@ -24,7 +24,7 @@ Add the plugin to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tauri-plugin-biometry = "0.2"
+tauri-plugin-biometry = "0.3"
 ```
 
 ### JavaScript/TypeScript
