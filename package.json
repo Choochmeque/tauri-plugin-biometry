@@ -42,7 +42,8 @@
     "prepublishOnly": "pnpm build",
     "pretest": "pnpm build",
     "format": "prettier --write \"./**/*.{cjs,mjs,js,jsx,mts,ts,tsx,html,css,json}\"",
-    "format-check": "prettier --check \"./**/*.{cjs,mjs,js,jsx,mts,ts,tsx,html,css,json}\""
+    "format-check": "prettier --check \"./**/*.{cjs,mjs,js,jsx,mts,ts,tsx,html,css,json}\"",
+    "format:check": "prettier --check \"./**/*.{cjs,mjs,js,jsx,mts,ts,tsx,html,css,json}\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0"
