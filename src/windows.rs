@@ -619,7 +619,7 @@ impl<R: Runtime> Biometry<R> {
         }
 
         let availability = UserConsentVerifier::CheckAvailabilityAsync()
-            .and_then(|async_op| async_op.get())
+            .and_then(|async_op| async_op.join())
             .map_err(|e| {
                 reject_fmt("internalError", "Failed to check biometry availability", &e)
             })?;
@@ -702,7 +702,7 @@ impl<R: Runtime> Biometry<R> {
         let async_op =
             unsafe { IAsyncOperation::<UserConsentVerificationResult>::from_raw(async_op_ptr) };
         let result = async_op
-            .get()
+            .join()
             .map_err(|e| reject_fmt("internalError", "Failed to request user verification", &e))?;
 
         match result {
