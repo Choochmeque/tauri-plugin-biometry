@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "app.tauri.biometry"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24        
