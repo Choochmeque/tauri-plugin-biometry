@@ -17,10 +17,10 @@ importers:
     devDependencies:
       '@sveltejs/adapter-static':
         specifier: ^4.0.1
-        version: 4.0.1(@sveltejs/kit@3.1.1(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1))
+        version: 4.0.1(@sveltejs/kit@3.2.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1))
       '@sveltejs/kit':
-        specifier: ^3.1.1
-        version: 3.1.1(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1)
+        specifier: ^3.2.0
+        version: 3.2.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1)
       '@sveltejs/vite-plugin-svelte':
         specifier: ^7.3.1
         version: 7.3.1(svelte@5.57.3)(vite@8.3.1)
@@ -51,8 +51,8 @@ packages:
   '@jridgewell/remapping@2.3.5':
     resolution: {integrity: sha512-LI9u/+laYG4Ds1TDKSJW2YPrIlcVYOwi2fUC6xB43lueCjgxV4lffOCZCtYFiH6TNOX+tQKXx97T4IKHbhyHEQ==}
 
-  '@jridgewell/resolve-uri@3.1.2':
-    resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
+  '@jridgewell/resolve-uri@3.1.3':
+    resolution: {integrity: sha512-lhTtjtoEArWBjismtfS761S9Hlyn+nIZqOZVYoZ1Xn82PMNMVnk+jj/NhC4fAXGTs7ydONcJiR5vyQBTMDu27g==}
     engines: {node: '>=6.0.0'}
 
   '@jridgewell/sourcemap-codec@1.6.0':
@@ -157,8 +157,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@rolldown/pluginutils@1.0.1':
-    resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
+  '@rolldown/pluginutils@1.1.1':
+    resolution: {integrity: sha512-glFIJDvLNDtJhT9qrMFWLPbvS+skxgt4L0K8Ei2YtnhPysAJnsI7nyxSJxKj4ADeKX0OLjC4ntRkwpLOoS3rwA==}
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -173,8 +173,8 @@ packages:
     peerDependencies:
       '@sveltejs/kit': ^3.0.0-next.0
 
-  '@sveltejs/kit@3.1.1':
-    resolution: {integrity: sha512-BiEMvekYXE9Gu/YhWJ/yJ0WDLH1PX/dmjuAeFp5rrtdmgdzkjt7DvimlSP+/U4tgposl7pkE20luHpcnc6BgRw==}
+  '@sveltejs/kit@3.2.0':
+    resolution: {integrity: sha512-zhb8GTeFd/6BwfqaY4wKIF7eFACYOgn/KNppV6UHFBHk174B4d7xTtN7x0PxaPPlwnCTgbnpaYF6r9lirz0Biw==}
     engines: {node: '>=22.17'}
     hasBin: true
     peerDependencies:
@@ -420,6 +420,9 @@ packages:
   magic-string@1.4.2:
     resolution: {integrity: sha512-vG+rjFRj1PqdIBozIxAGMjPlOhaVe+GXpbttY/iSK7rGcJRMlwNJO7dcUwmUqkymsFLJiNGI06t4D7Fr7yRC9g==}
 
+  magic-string@1.4.5:
+    resolution: {integrity: sha512-oLLC2+YvQUfAa+vxoufE/yc1icb87M9iXIRqAoR/2EhE/8cb3SF/+Gi0c2By1B+5Vz2e2vQtUvHiu1+63Znh+w==}
+
   mri@1.2.0:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
     engines: {node: '>=4'}
@@ -564,13 +567,13 @@ snapshots:
       '@jridgewell/gen-mapping': 0.3.13
       '@jridgewell/trace-mapping': 0.3.31
 
-  '@jridgewell/resolve-uri@3.1.2': {}
+  '@jridgewell/resolve-uri@3.1.3': {}
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
-      '@jridgewell/resolve-uri': 3.1.2
+      '@jridgewell/resolve-uri': 3.1.3
       '@jridgewell/sourcemap-codec': 1.6.0
 
   '@oxc-project/types@0.152.0': {}
@@ -622,7 +625,7 @@ snapshots:
   '@rolldown/binding-win32-x64-msvc@1.2.12':
     optional: true
 
-  '@rolldown/pluginutils@1.0.1': {}
+  '@rolldown/pluginutils@1.1.1': {}
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -630,19 +633,20 @@ snapshots:
     dependencies:
       acorn: 8.19.0
 
-  '@sveltejs/adapter-static@4.0.1(@sveltejs/kit@3.1.1(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1))':
+  '@sveltejs/adapter-static@4.0.1(@sveltejs/kit@3.2.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1))':
     dependencies:
-      '@sveltejs/kit': 3.1.1(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1)
+      '@sveltejs/kit': 3.2.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1)
 
-  '@sveltejs/kit@3.1.1(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1)':
+  '@sveltejs/kit@3.2.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.1))(svelte@5.57.3)(typescript@5.6.3)(vite@8.3.1)':
     dependencies:
-      '@rolldown/pluginutils': 1.0.1
+      '@jridgewell/trace-mapping': 0.3.31
+      '@rolldown/pluginutils': 1.1.1
       '@standard-schema/spec': 1.1.0
       '@sveltejs/vite-plugin-svelte': 7.3.1(svelte@5.57.3)(vite@8.3.1)
       cookie: 2.0.2
       devalue: 5.9.4
       esm-env: 1.2.2
-      magic-string: 1.4.2
+      magic-string: 1.4.5
       mrmime: 2.0.1
       sirv: 3.0.2
       svelte: 5.57.3
@@ -808,6 +812,10 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
+  magic-string@1.4.5:
+    dependencies:
+      '@jridgewell/sourcemap-codec': 1.6.0
+
   mri@1.2.0: {}
 
   mrmime@2.0.1: {}
@@ -831,7 +839,7 @@ snapshots:
   rolldown@1.2.12:
     dependencies:
       '@oxc-project/types': 0.152.0
-      '@rolldown/pluginutils': 1.0.1
+      '@rolldown/pluginutils': 1.1.1
     optionalDependencies:
       '@rolldown/binding-android-arm-eabi': 1.2.12
       '@rolldown/binding-android-arm64': 1.2.12
